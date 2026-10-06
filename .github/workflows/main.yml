@@ -119,13 +119,20 @@ jobs:
       - name: 安装项目依赖（Haxe 库）
         run: |
           set -Eeuo pipefail
-          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
-          haxelib install openfl 9.1.0 --always
-          haxelib install flixel 4.11.0 --always
-          haxelib install flixel-addons 2.11.0 --always
-          haxelib install flixel-ui 2.4.0 --always
-          haxelib install hscript 2.4.0 --always
-          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          # ⚠⚠ 全部加 --skip-dependencies！
+          #   haxelib 会自动解析并安装每个库声明的依赖，而这些"顺带装"的包
+          #   全是巨型 haxelib 包，在 runner 上会断流：
+          #     · haxelib git hxcpp  → 拖进 lime 8.3.2（185MB，带全平台二进制）
+          #     · haxelib install hxvlc → 拖进 hxcpp 4.3.2（顶掉我们的 git fork）
+          #   实测 iOS 侧就死在 lime 8.3.2 的 185.57MB 下载上（卡在 98%）。
+          #   我们本来就手工装齐了每一个依赖，压根不需要它再解析一遍。
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main --skip-dependencies
+          haxelib install openfl 9.1.0 --always --skip-dependencies
+          haxelib install flixel 4.11.0 --always --skip-dependencies
+          haxelib install flixel-addons 2.11.0 --always --skip-dependencies
+          haxelib install flixel-ui 2.4.0 --always --skip-dependencies
+          haxelib install hscript 2.4.0 --always --skip-dependencies
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main --skip-dependencies
 
           # hxvlc 版本选择（反复踩坑后的结论）：
           #   * 1.7 / 1.8.x：没有 GPU 渲染路径（bitmap.forceRendering / 纹理）
@@ -152,15 +159,15 @@ jobs:
           if [ "$ok" != "1" ]; then echo "### hxvlc zip 下载失败（6 次都断了）"; exit 1; fi
           ls -l "$HXVLC_ZIP"
           echo "## 离线安装 hxvlc"
-          haxelib install "$HXVLC_ZIP" --always
+          haxelib install "$HXVLC_ZIP" --always --skip-dependencies
           haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
           haxelib remove linc_luajit || true
-          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
-          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
-          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
-          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master --skip-dependencies || echo "skip linc_luajit"
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main --skip-dependencies || echo "skip hxShaders"
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master --skip-dependencies || echo "skip discord_rpc"
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main --skip-dependencies || echo "skip androidtools"
 
           # ⚠ 必须在【所有依赖装完】之后把 hxcpp 切回 git fork！
           #   两个 hxcpp 的实际版本号：
@@ -508,16 +515,19 @@ jobs:
       - name: 安装项目依赖（Haxe 库）
         run: |
           set -Eeuo pipefail
-          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
-          haxelib install openfl 9.1.0 --always
-          haxelib install flixel 4.11.0 --always
-          haxelib install flixel-addons 2.11.0 --always
-          haxelib install flixel-ui 2.4.0 --always
-          haxelib install hscript 2.4.0 --always
+          # ⚠⚠ 全部加 --skip-dependencies！理由同 iOS 侧：
+          #     haxelib 自动解析依赖时会顺带拉巨型包并断流
+          #     （hxcpp → lime 8.3.2 185MB；hxvlc → hxcpp 4.3.2 顶掉 git fork）。
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main --skip-dependencies
+          haxelib install openfl 9.1.0 --always --skip-dependencies
+          haxelib install flixel 4.11.0 --always --skip-dependencies
+          haxelib install flixel-addons 2.11.0 --always --skip-dependencies
+          haxelib install flixel-ui 2.4.0 --always --skip-dependencies
+          haxelib install hscript 2.4.0 --always --skip-dependencies
           # ⚠ 必须和 iOS 侧一致用 git 版：这个 fork 才是 lime 8.2.2 配套的那份，
           #   装 haxelib 上的 4.2.1/4.3.2 会让 lime 起不来（表现为
           #   `haxelib run lime` 静默退出、build.log 0 字节）。
-          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main --skip-dependencies
 
           # hxvlc 1.9.3：唯一同时满足「有 GPU 渲染路径」+「Haxe 4.2.4 语法通过」
           # +「随库带 Android libvlc-.so」的版本。
@@ -550,15 +560,15 @@ jobs:
           if [ "$ok" != "1" ]; then echo "### hxvlc zip 下载失败（6 次都断了）"; exit 1; fi
           ls -l "$HXVLC_ZIP"
           echo "## 离线安装 hxvlc"
-          haxelib install "$HXVLC_ZIP" --always
+          haxelib install "$HXVLC_ZIP" --always --skip-dependencies
           haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
           haxelib remove linc_luajit || true
-          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
-          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
-          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
-          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master --skip-dependencies || echo "skip linc_luajit"
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main --skip-dependencies || echo "skip hxShaders"
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master --skip-dependencies || echo "skip discord_rpc"
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main --skip-dependencies || echo "skip androidtools"
 
           # ⚠ 必须在【所有依赖装完】之后把 hxcpp 切回 git fork！
           #   两个 hxcpp 的实际版本号：
