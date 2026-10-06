@@ -189,7 +189,7 @@ class Main extends Sprite
 	//   「一直放大」「偏右」「播完卡住」。现在这里【只做显隐】，不碰 scale/x/y。
 	private function ensureVideoBitmapVisible():Void
 	{
-		#if (VIDEOS_ALLOWED && (ios || android))
+		#if (VIDEOS_ALLOWED && ios)
 		// ★ 若自动兜底已经判断「FlxSprite 正路不通」并打开了内层 Bitmap，
 		//   这里就不能再关它（否则每隔 12 帧反复横跳 ⇒ 画面闪烁）。
 		//   该标记由 VideoHandler 的 autoFallbackTimer 置位。
@@ -230,11 +230,10 @@ class Main extends Sprite
 
 	private function setupGame():Void
 	{
-		// ==================== [MOBILE] 视频渲染路径（由开关控制）====================
+		// ==================== [PE-iOS] 视频渲染路径（由开关控制）====================
 		// 开关定义见类顶部 PEI_USE_GPU_TEXTURE_PATH 的注释（含两轮矛盾实测记录）。
 		// 这里只按开关执行，不再写死结论。
-		// 平台：ios + android 共用同一开关（两者都用 hxvlc 1.9.3，渲染路径一致）。
-		#if (VIDEOS_ALLOWED && (ios || android))
+		#if (VIDEOS_ALLOWED && ios)
 		try
 		{
 			if (PEI_USE_GPU_TEXTURE_PATH)
@@ -310,7 +309,7 @@ class Main extends Sprite
 			+ '\n（RatioScaleMode 将按 canvasRatio 适配并自动加黑边居中）\n';
 		trace('[PE-iOS] 视口：' + info.replace('\n', ' '));
 
-		#if (ios || android)
+		#if ios
 		try { File.saveContent(SUtil.getPath() + 'pe_ios_viewport.txt', info); } catch (e:Dynamic) {}
 		#end
 
@@ -378,16 +377,13 @@ class Main extends Sprite
 		});
 
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
-		// [PE-iOS] FPS 计数器避开顶部刘海区。
-		//   ⚠ 这个偏移只对 iOS（刘海/灵动岛）有意义，安卓没有刘海区，
-		//     偏移过去反而显得 FPS 显示位置怪异 ⇒ 只在 ios 上生效。
-		#if ios
+		// [PE-iOS] 不再用已删除的 yOffset。FPS 计数器直接避开顶部刘海区，
+		//   用常量比例算一个固定下移量（画面本身是完全居中的，不受影响）。
 		{
 			var hudInset:Int = Std.int(Lib.current.stage.stageHeight * IOS_TOP_INSET_RATIO);
 			if (hudInset > 6)
 				fpsVar.y = hudInset - 3;
 		}
-		#end
 		addChild(fpsVar);
 		// align/scaleMode 已在上面统一设置（NO_SCALE + tl），此处不再重复。
 		if(fpsVar != null) {
