@@ -133,9 +133,26 @@ jobs:
           #   * 1.9.4+ / 2.x：用了 Haxe 4.3 的 `?.` 安全导航语法 → Haxe 4.2.4 语法报错；
           #   * 1.9.3：既有 forceRendering，又是 if(bitmap != null) 写法，发布在
           #     2024-06-30 PR #57（android/ios libs include visual module）之后 → 正好可用。
-          echo "## hxvlc 1.9.3"
-          rm -rf "$HAXELIB_ROOT/hxvlc"
-          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          echo "## hxvlc 1.9.3（curl 断点续传 + 本地离线安装）"
+          # 说明同安卓侧：hxvlc 的 zip 有 212MB，haxelib 自带下载器会中途断流。
+          HXVLC_ZIP="$RUNNER_TEMP/hxvlc-1.9.3.zip"
+          HXVLC_URL="https://lib.haxe.org/files/3.0/hxvlc-1,9,3.zip"
+          rm -f "$HXVLC_ZIP"
+          ok=0
+          for i in 1 2 3 4 5 6; do
+            echo "── 第 $i 次尝试下载 hxvlc zip ──"
+            if curl -fL --retry 8 --retry-all-errors --retry-delay 5 \
+                    -C - --connect-timeout 30 --max-time 2400 \
+                    "$HXVLC_URL" -o "$HXVLC_ZIP"; then
+              if unzip -tq "$HXVLC_ZIP" >/dev/null 2>&1; then ok=1; break; fi
+              echo "!! zip 完整性校验没过，删掉重下"
+              rm -f "$HXVLC_ZIP"
+            fi
+          done
+          if [ "$ok" != "1" ]; then echo "### hxvlc zip 下载失败（6 次都断了）"; exit 1; fi
+          ls -l "$HXVLC_ZIP"
+          echo "## 离线安装 hxvlc"
+          haxelib install "$HXVLC_ZIP" --always
           haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
@@ -473,9 +490,36 @@ jobs:
 
           # hxvlc 1.9.3：唯一同时满足「有 GPU 渲染路径」+「Haxe 4.2.4 语法通过」
           # +「随库带 Android libvlc-.so」的版本。
-          echo "## hxvlc 1.9.3"
-          rm -rf "$HAXELIB_ROOT/hxvlc"
-          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          #
+          # ⚠⚠ 千万不要用 `haxelib install hxvlc 1.9.3` 直接从网上拉！
+          #   这个包的 zip 有 212MB（里面塞了 Android/iOS/macOS/Windows 四个
+          #   平台的 libvlc 原生库）。haxelib 自带的下载器在 GitHub Actions 的
+          #   runner 上会【中途断流且不报错重试】，实测两次分别死在
+          #   154MB(69%) 和 106MB(47%)，日志戛然而止、job 直接失败，
+          #   看起来像"编译失败"，其实根本没到编译阶段。
+          #
+          #   改用 curl：--retry-all-errors + -C - 断点续传，
+          #   断了能接着下，比 haxelib 内置下载器硬得多。
+          #   下完再 `haxelib install <本地zip>` 离线安装。
+          echo "## hxvlc 1.9.3（curl 断点续传 + 本地离线安装）"
+          HXVLC_ZIP="$RUNNER_TEMP/hxvlc-1.9.3.zip"
+          HXVLC_URL="https://lib.haxe.org/files/3.0/hxvlc-1,9,3.zip"
+          rm -f "$HXVLC_ZIP"
+          ok=0
+          for i in 1 2 3 4 5 6; do
+            echo "── 第 $i 次尝试下载 hxvlc zip ──"
+            if curl -fL --retry 8 --retry-all-errors --retry-delay 5 \
+                    -C - --connect-timeout 30 --max-time 2400 \
+                    "$HXVLC_URL" -o "$HXVLC_ZIP"; then
+              if unzip -tq "$HXVLC_ZIP" >/dev/null 2>&1; then ok=1; break; fi
+              echo "!! zip 完整性校验没过，删掉重下"
+              rm -f "$HXVLC_ZIP"
+            fi
+          done
+          if [ "$ok" != "1" ]; then echo "### hxvlc zip 下载失败（6 次都断了）"; exit 1; fi
+          ls -l "$HXVLC_ZIP"
+          echo "## 离线安装 hxvlc"
+          haxelib install "$HXVLC_ZIP" --always
           haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
@@ -525,6 +569,11 @@ jobs:
       #   但内置那份不带 android.Hardware / android.Tools 这些 Haxe 绑定类，
       #   而源码又必须要 —— 所以把 haxelib 里的 Haxe 源码拷进项目，
       #   用 <classpath path="extension-androidtools/src"/> 挂进来。
+      #
+      # ⚠ 必须【排除】 src/android/os/Build.hx！
+      #   extension-androidtools 里那个 Build 是个只有 791 字节的精简版，
+      #   挂进来会把 lime 自带的完整版覆盖掉，于是 lime 自己编译时报：
+      #     lime/system/System.hx:943: Class<android.os.Build> has no field VERSION
       - name: 把 extension-androidtools 的 Haxe 源码拷进项目
         run: |
           set -Eeuo pipefail
@@ -537,9 +586,13 @@ jobs:
           rm -rf extension-androidtools
           mkdir -p extension-androidtools
           cp -R "$ET/src" extension-androidtools/src
+          # 干掉精简版 Build，保留 lime 自带的完整版
+          rm -f extension-androidtools/src/android/os/Build.hx
+          rmdir extension-androidtools/src/android/os 2>/dev/null || true
           echo "### 拷进来的类 ###"
           ls extension-androidtools/src/android/
-          ls extension-androidtools/src/android/os/ 2>/dev/null || true
+          echo "### 确认 android/os/Build.hx 已排除 ###"
+          ls extension-androidtools/src/android/os/ 2>/dev/null && echo "!! 还在" || echo "已排除，OK"
           {
             echo '### extension-androidtools 源码（已拷入项目）'
             echo '```'
