@@ -131,11 +131,24 @@
 	<!-- video: use hxvlc (ships iOS static libs). Do NOT use hxCodec: on iOS it links a libvlc.a that was never shipped -->
 	<haxelib name="hxvlc" if="VIDEOS_ALLOWED"/>
 	<haxelib name="linc_luajit" if="LUA_ALLOWED"/>
-	<!-- [MOBILE] 不要在这里引 extension-androidtools！
-	     lime 8.2.2 已经内置了它，再引一次会报：
-	       The haxelib 'extension-androidtools' is already included in this Lime.
-	       Please remove it from the project file to compile.
-	     （hmm.json 里保留它没关系，那是给本地 haxelib 环境用的。） -->
+	<!-- [MOBILE] extension-androidtools：安卓源码要用它提供的
+	     android.Tools / android.Hardware / android.Permissions / android.PermissionsList
+	     （SUtil.hx 取外部存储路径、FunkinLua.hx 的震动、GameOver 的亮度都靠它）。
+
+	     ⚠ 坑：lime 8.2.2 自带了一份 extension-androidtools，如果直接
+	        <haxelib name="extension-androidtools" if="android"/>
+	     会报：
+	        The haxelib 'extension-androidtools' is already included in this Lime.
+	        Please remove it from the project file to compile.
+
+	     ⚠ 但也不能干脆删掉 —— 删了之后 lime 内置的那份【不含 android.* 这几个
+	     Haxe 绑定类】，源码会报一堆：
+	        Type not found : android.Hardware / android.PermissionsList
+
+	     解法：用 <classpath> 只把 haxelib 里的【Haxe 源码目录】挂进来，
+	     不再通过 <haxelib> 走 include.xml（Java 扩展那边用 lime 内置的，
+	     两边包名一致都是 org.haxe.extension.*，不会冲突）。 -->
+	<classpath path="extension-androidtools/src" if="android"/>
 	<haxelib name="faxe" if='switch'/>
 	<!--<haxelib name="polymod"/> -->
 	<haxelib name="discord_rpc" if="desktop"/>
