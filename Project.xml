@@ -87,14 +87,12 @@
 	<section if="ios">
 		<architecture name="arm64" />
 	</section>
-	<!-- [MOBILE] Android：默认打 arm64-v8a + armeabi-v7a 双 ABI。
-	     hxvlc 的 project/vlc/lib/Android 里有 4 个 ABI 的 libvlc-.so
-	     （64 / v7 / x86 / x86_64），这里只挑真机用得上的两个，
-	     少打两个 ABI 能显著减小 apk 体积、缩短链接时间。
+	<!-- [MOBILE] Android：只打 arm64-v8a。
+	     armv7（32 位）现在真机基本绝迹，且会让 C++ 编译时间翻倍、
+	     还容易在 hxvlc 的 32 位预编译库上踩坑，所以砍掉。
 	     要跑模拟器就把 x86 / x86_64 加回来。 -->
 	<section if="android">
 		<architecture name="arm64" />
-		<architecture name="armv7" />
 	</section>
 	<define name="PSYCH_WATERMARKS"/> <!-- DELETE THIS TO REMOVE WATERMARKS/DEV NAMES ON TITLE SCREEN -->
 	<define name="TITLE_SCREEN_EASTER_EGG" if="officialBuild"/> <!-- DELETE THE if="officialBuild" for enabling this on an unofficial build -->
