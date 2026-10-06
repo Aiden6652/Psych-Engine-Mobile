@@ -1,4 +1,4 @@
-name: Psych Engine 0.6.3 iOS Build
+name: Psych Engine 0.6.3 Mobile Build (iOS + Android)
 
 on:
   push:
@@ -218,4 +218,220 @@ jobs:
         with:
           name: PsychEngine_iOS_unsigned
           path: PsychEngine_iOS_unsigned.ipa
+          retention-days: 14
+
+  # ============================================================================
+  # Android 构建
+  # ============================================================================
+  # 与 iOS job 的关系：
+  #   · 源码完全相同（同一份 source/，含 hxcodec/VideoHandler.hx 兼容层）
+  #   · 目标平台不同 → Project.xml 里 VIDEOS_ALLOWED 已含 android
+  #   · 视频后端同为 hxvlc 1.9.3（该版本随库带 Android 的 libvlc-*.so）
+  #
+  # 工具链：JDK 11 + Android SDK (API 34 + Build-Tools 34) + NDK r15c
+  #   ⚠ NDK r15c 是老的，但与本仓库锁定的 hxcpp 以及 Lime 8 的默认工具链匹配，
+  #     不要随意升级（新版 NDK 去掉了 gcc、改了 STL 头，hxcpp 会编不过）。
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
+      HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 恢复仓库自带 assets / example_mods
+        run: |
+          set -Eeuo pipefail
+          rm -rf assets resources.zip assets/preload/resources.zip mods
+          git checkout -f HEAD -- assets
+          git checkout -f HEAD -- example_mods
+          echo "assets 文件数: $(find assets -type f | wc -l)"
+
+      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
+        run: |
+          set -Eeuo pipefail
+          python3 tools/patch_lua_guard.py
+          grep -c "LuaGuard" source/FunkinLua.hx || true
+
+      - name: 安装 JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: 安装 Android NDK r15c
+        run: |
+          set -Eeuo pipefail
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-r15c-linux-x86_64.zip"
+          curl -fL --retry 5 --retry-delay 5 -o /tmp/ndk.zip "$NDK_URL"
+          ls -lh /tmp/ndk.zip
+          mkdir -p "$HOME/android-ndk"
+          unzip -q /tmp/ndk.zip -d "$HOME/android-ndk"
+          NDK_ROOT="$(find "$HOME/android-ndk" -maxdepth 1 -type d -name 'android-ndk-*' | head -1)"
+          echo "NDK_ROOT=$NDK_ROOT"
+          echo "ANDROID_NDK_ROOT=$NDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK=$NDK_ROOT" >> "$GITHUB_ENV"
+          ls "$NDK_ROOT" | head
+
+      - name: 安装 Haxe 4.2.4
+        run: |
+          set -Eeuo pipefail
+          # ⚠ 必须 4.2.4（不是 4.2.5、更不是 4.3）：
+          #   hxvlc 1.9.4+ / 2.x 用了 Haxe 4.3 的 `?.` 语法，4.2.4 编不过；
+          #   本项目锁 hxvlc 1.9.3，与 iOS 侧保持同一 Haxe 版本最省心。
+          curl -fL --retry 5 --retry-delay 5 -o /tmp/haxe.tar.gz \
+            https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-linux64.tar.gz
+          mkdir -p "$HOME/haxe"
+          tar -xzf /tmp/haxe.tar.gz -C "$HOME/haxe"
+          HAXE_DIR="$(find "$HOME/haxe" -maxdepth 1 -type d -name 'haxe_*' | head -1)"
+          echo "$HAXE_DIR" >> "$GITHUB_PATH"
+          # neko 运行时（haxelib 需要）
+          curl -fL --retry 5 --retry-delay 5 -o /tmp/neko.tar.gz \
+            https://github.com/HaxeFoundation/neko/releases/download/v2-3-0/neko-2.3.0-linux64.tar.gz
+          mkdir -p "$HOME/neko"
+          tar -xzf /tmp/neko.tar.gz -C "$HOME/neko"
+          NEKO_DIR="$(find "$HOME/neko" -maxdepth 1 -type d -name 'neko-*' | head -1)"
+          echo "$NEKO_DIR" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$NEKO_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "NEKOPATH=$NEKO_DIR" >> "$GITHUB_ENV"
+          "$HAXE_DIR/haxe" -version
+          "$NEKO_DIR/neko" -version
+
+      - name: 配置 haxelib
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HAXELIB_ROOT"
+          haxelib setup "$HAXELIB_ROOT"
+          mkdir -p "$HXCPP_COMPILE_CACHE"
+          du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
+
+      - name: 缓存 haxelib 库
+        uses: actions/cache@v4
+        with:
+          path: _haxelib
+          key: psych063-android-haxelib-v1
+          restore-keys: |
+            psych063-android-haxelib-
+
+      - name: 缓存 hxcpp 编译产物（提速关键）
+        uses: actions/cache@v4
+        with:
+          path: .hxcpp-cache
+          key: hxcpp-android-cache-haxe424-v1
+          restore-keys: |
+            hxcpp-android-cache-haxe424-
+
+      - name: 安装依赖
+        run: |
+          set -Eeuo pipefail
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
+          haxelib install openfl 9.1.0 --always
+          haxelib install flixel 4.11.0 --always
+          haxelib install flixel-addons 2.11.0 --always
+          haxelib install flixel-ui 2.4.0 --always
+          haxelib install hscript 2.4.0 --always
+          haxelib install hxcpp 4.2.1 --always
+          haxelib install format 3.7.0 --always || true
+
+          # hxvlc 1.9.3：唯一同时满足「有 GPU 渲染路径」+「Haxe 4.2.4 语法通过」
+          # +「随库带 Android libvlc-.so」的版本。
+          echo "## hxvlc 1.9.3"
+          rm -rf "$HAXELIB_ROOT/hxvlc"
+          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          haxelib set hxvlc 1.9.3
+
+          echo "## 可选依赖"
+          haxelib remove linc_luajit || true
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+          haxelib list
+
+      - name: 自检 hxvlc（确认 Android 原生库在）
+        run: |
+          set +e
+          HV=$(ls -d "$HAXELIB_ROOT/hxvlc/"* 2>/dev/null | head -1)
+          echo "hxvlc 目录: $HV"
+          grep -m1 'version' "$HV/haxelib.json"
+          echo "### include.xml 里的 android 段（应有 ndll vlc / c++_shared）###"
+          grep -A4 'section if="android"' "$HV/include.xml"
+          echo "### Android 原生库文件 ###"
+          ls -lh "$HV/project/vlc/lib/Android/" 2>/dev/null || echo "!! 找不到 Android 库目录"
+          echo "### forceRendering 是否存在 ###"
+          grep -n "forceRendering" "$HV/source/hxvlc/openfl/Video.hx" | head -3
+
+      - name: 初始化 lime（Android）
+        run: |
+          set +e
+          ( yes | haxelib run lime setup android ) & PID=$!
+          for i in $(seq 1 40); do
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          kill "$PID" 2>/dev/null || true
+          haxelib run lime --version 2>&1 | tail -5
+
+      - name: 编译 Android
+        id: build
+        continue-on-error: true
+        run: |
+          set +e
+          START=$(date +%s)
+          haxelib run lime build android -release > build.log 2>&1
+          RC=$?
+          END=$(date +%s)
+          echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
+          echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
+          grep -c "Compiling" build.log || true
+          tail -80 build.log
+          echo "### Haxe 报错行（.hx:行号）###"
+          grep -nE '\.hx:[0-9]+' build.log | tail -40
+          echo "### 原生链接/NDK 报错行 ###"
+          grep -nE 'Error [0-9]+$|Undefined symbols|ld: |error:' build.log | tail -30
+          ERR="$(grep -E '\.hx:[0-9]+' build.log | tail -40)"
+          if [ -z "$ERR" ]; then ERR="$(tail -25 build.log)"; fi
+          printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::${line:0:900}"
+          done
+          APK=$(find export -maxdepth 8 -name "*.apk" -type f | head -n 1)
+          if [ -z "$APK" ]; then echo "### 没有 .apk 产物 ###"; exit 1; fi
+          echo "产物: $APK"
+          exit $RC
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lime-build-log-android
+          path: build.log
+
+      - name: 检查构建结果
+        if: steps.build.outcome == 'failure'
+        run: exit 1
+
+      - name: 整理 APK 产物
+        run: |
+          set -Eeuo pipefail
+          APK=$(find export -maxdepth 8 -name "*.apk" -type f | head -n 1)
+          echo "产物: $APK"
+          du -sh "$APK"
+          # 确认 hxvlc 的原生库真的打进去了（缺 libvlc.so 会导致一放视频就崩）
+          echo "### APK 里的 libvlc / libc++_shared ###"
+          unzip -l "$APK" | grep -E 'libvlc|libc\+\+_shared' || echo "!! APK 内找不到 libvlc（视频会崩）"
+          cp -f "$APK" PsychEngine_Android_unsigned.apk
+          ls -lh PsychEngine_Android_unsigned.apk
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsychEngine_Android_unsigned
+          path: PsychEngine_Android_unsigned.apk
           retention-days: 14
