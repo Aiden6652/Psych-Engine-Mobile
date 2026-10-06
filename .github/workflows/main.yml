@@ -3,7 +3,23 @@ name: Psych Engine 0.6.3 Mobile Build (iOS + Android)
 on:
   push:
     branches: [ main ]
+    # 只在这些路径变更时触发。
+    # ⚠ 没有这个过滤 + 下面的 concurrency，批量同步文件会把队列刷爆
+    #   （每推一个文件 = 一次 commit = 一次完整 iOS+Android 构建）。
+    paths:
+      - 'source/**'
+      - 'Project.xml'
+      - 'hmm.json'
+      - '.github/workflows/**'
+      - 'assets/**'
+      - 'example_mods/**'
   workflow_dispatch:
+
+# 同一分支只保留最新一次运行，旧的自动取消。
+# 这是「批量推送刷屏」的根治办法：连推 10 个文件，只会留下最后那次。
+concurrency:
+  group: mobile-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-ios:
