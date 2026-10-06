@@ -47,9 +47,25 @@
 	<define name="MODS_ALLOWED" if="desktop || android || ios" />
 	<define name="LUA_ALLOWED" if="desktop || android || ios" />
 	<define name="ACHIEVEMENTS_ALLOWED" />
-	<define name="VIDEOS_ALLOWED" if="web || windows || ios" />
+	<!-- [MOBILE] 视频：ios + android 双平台放开。
+	     · ios      —— hxvlc 随库带 libvlc_device.a / libvlc_sim.a
+	     · android  —— hxvlc 随库带 libvlc-{64,v7,x86,x86_64}.so + libc++_shared-*.so
+	     · 两端共用同一层兼容层 source/hxcodec/VideoHandler.hx（内部是 hxvlc 的翻译实现，
+	       它的 #if 条件已写成 (ios || android)）。
+	     ⚠ 不要再用 hxCodec：iOS 上它链的 libvlc.a 从未随库发布；安卓上它的原生扩展
+	       与 Lime/OpenFL 这条链不兼容。—— 上游注释也是同一个结论。 -->
+	<define name="VIDEOS_ALLOWED" if="web || windows || ios || android" />
 	<section if="ios">
 		<architecture name="arm64" />
+	</section>
+	<!-- [MOBILE] Android：默认打 arm64-v8a + armeabi-v7a 双 ABI。
+	     hxvlc 的 project/vlc/lib/Android 里有 4 个 ABI 的 libvlc-.so
+	     （64 / v7 / x86 / x86_64），这里只挑真机用得上的两个，
+	     少打两个 ABI 能显著减小 apk 体积、缩短链接时间。
+	     要跑模拟器就把 x86 / x86_64 加回来。 -->
+	<section if="android">
+		<architecture name="arm64" />
+		<architecture name="armv7" />
 	</section>
 	<define name="PSYCH_WATERMARKS"/> <!-- DELETE THIS TO REMOVE WATERMARKS/DEV NAMES ON TITLE SCREEN -->
 	<define name="TITLE_SCREEN_EASTER_EGG" if="officialBuild"/> <!-- DELETE THE if="officialBuild" for enabling this on an unofficial build -->
