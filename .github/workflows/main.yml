@@ -492,13 +492,23 @@ jobs:
           haxelib path lime
           echo "### hxcpp 版本"
           haxelib list hxcpp
-          echo "### lime setup android（最多 80s）"
-          ( yes | haxelib run lime setup android ) & PID=$!
-          for i in $(seq 1 40); do
-            if ! kill -0 "$PID" 2>/dev/null; then break; fi
-            sleep 2
-          done
-          kill "$PID" 2>/dev/null || true
+          # ⚠ 不要用 `yes | haxelib run lime setup android`！
+          #   lime setup 会交互式询问 SDK/NDK 路径，`yes` 灌进去的 'y' 会被
+          #   当成路径存下来，编译时报：
+          #     Error: Cannot find directory "y/build-tools/"
+          #   正确做法是用 lime 的配置命令把路径写死，全程无交互。
+          echo "### 写死 SDK / NDK 路径（不交互）"
+          haxelib run lime config ANDROID_SDK "$ANDROID_HOME"
+          haxelib run lime config ANDROID_NDK_ROOT "$ANDROID_NDK_ROOT"
+          haxelib run lime config JAVA_HOME "$JAVA_HOME"
+          echo "### 确认写入的配置"
+          haxelib run lime config 2>&1 | tee /tmp/lime_cfg.txt | head -40
+          {
+            echo '### lime config'
+            echo '```'
+            cat /tmp/lime_cfg.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo "### lime --version（完整输出）"
           haxelib run lime --version
           echo "lime --version RC=$?"
