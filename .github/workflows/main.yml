@@ -158,13 +158,32 @@ jobs:
       - name: 初始化 lime
         run: |
           set +e
+          echo "### haxelib 版本 / 路径"
+          haxelib version
+          echo "### lime 位置"
+          haxelib path lime
+          echo "### hxcpp 版本"
+          haxelib list hxcpp
+          echo "### 跑 lime setup（最多 60s）"
           ( haxelib run lime setup </dev/null ) & PID=$!
           for i in $(seq 1 30); do
             if ! kill -0 "$PID" 2>/dev/null; then break; fi
             sleep 2
           done
           kill "$PID" 2>/dev/null || true
-          haxelib run lime --version 2>&1 | tail -5
+          echo "### lime --version（完整输出，不吞 stderr）"
+          haxelib run lime --version
+          echo "lime --version RC=$?"
+          echo "### lime 的 ndll 是否已生成"
+          LV=$(ls -d "$HAXELIB_ROOT/lime/"* 2>/dev/null | head -1)
+          echo "lime dir: $LV"
+          ls -la "$LV/ndll/Mac64" 2>/dev/null || echo "!! 没有 ndll/Mac64（lime 没编译出来）"
+          {
+            echo '### lime --version 输出'
+            echo '```'
+            haxelib run lime --version 2>&1 | tail -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: 选择 Xcode
         run: |
@@ -195,6 +214,23 @@ jobs:
           printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error::${line:0:900}"
           done
+          # 把错误同时贴到摘要页，省得每次都要下几十 MB 日志
+          {
+            echo "## lime build ios  RC=$RC  用时 $((END-START))s"
+            echo ""
+            echo '### Haxe 报错（.hx:行号）'
+            echo '```'
+            grep -E '\.hx:[0-9]+' build.log | tail -25 || echo '(无)'
+            echo '```'
+            echo '### 链接 / make 报错'
+            echo '```'
+            grep -E '^make: \*\*\*|Error [0-9]+$|Undefined symbols|ld: |clang' build.log | tail -25 || echo '(无)'
+            echo '```'
+            echo '### 日志尾部 40 行'
+            echo '```'
+            tail -40 build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then echo "### 没有 .app 产物 ###"; exit 1; fi
           echo "产物: $APP"
@@ -271,16 +307,45 @@ jobs:
           python3 tools/patch_lua_guard.py
           grep -c "LuaGuard" source/FunkinLua.hx || true
 
-      - name: 安装 JDK 11
+      # ⚠ 顺序很关键：setup-android@v3 会拉最新的 cmdline-tools（16.0），
+      #   而它【强制要求 JDK 17+】，会直接报
+      #   "This tool requires JDK 17 or later. Your version was detected as 11"
+      #   并让整个 job 挂掉。
+      #   所以先用 runner 自带的 JDK 17 把 SDK 装完，再切回 JDK 11 给 Gradle 用
+      #   （Gradle 7.5.1 不支持 17+）。
+      - name: 安装 Android SDK（此时用 runner 自带 JDK 17）
+        run: |
+          set -Eeuo pipefail
+          echo "当前 java: $(java -version 2>&1 | head -1)"
+          echo "JAVA_HOME=${JAVA_HOME:-<unset>}"
+        shell: bash
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: 确认 SDK 就绪
+        run: |
+          set -Eeuo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<unset>}"
+          ls "${ANDROID_HOME}/platforms" || true
+          ls "${ANDROID_HOME}/build-tools" || true
+
+      - name: 切到 JDK 11（Gradle 7.5.1 需要）
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '11'
+          java-package: jdk
 
-      - name: 安装 Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+      - name: 确认 JDK 11 生效
+        run: |
+          set -Eeuo pipefail
+          java -version
+          echo "JAVA_HOME=$JAVA_HOME"
+          # sdkmanager 若被后续步骤调用会再次需要 17，这里禁掉版本检查
+          echo "SKIP_JDK_VERSION_CHECK=1" >> "$GITHUB_ENV"
 
       - name: 安装 Android NDK r15c
         run: |
@@ -353,8 +418,10 @@ jobs:
           haxelib install flixel-addons 2.11.0 --always
           haxelib install flixel-ui 2.4.0 --always
           haxelib install hscript 2.4.0 --always
-          haxelib install hxcpp 4.2.1 --always
-          haxelib install format 3.7.0 --always || true
+          # ⚠ 必须和 iOS 侧一致用 git 版：这个 fork 才是 lime 8.2.2 配套的那份，
+          #   装 haxelib 上的 4.2.1/4.3.2 会让 lime 起不来（表现为
+          #   `haxelib run lime` 静默退出、build.log 0 字节）。
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
           # hxvlc 1.9.3：唯一同时满足「有 GPU 渲染路径」+「Haxe 4.2.4 语法通过」
           # +「随库带 Android libvlc-.so」的版本。
@@ -387,13 +454,29 @@ jobs:
       - name: 初始化 lime（Android）
         run: |
           set +e
+          echo "### lime 位置"
+          haxelib path lime
+          echo "### hxcpp 版本"
+          haxelib list hxcpp
+          echo "### lime setup android（最多 80s）"
           ( yes | haxelib run lime setup android ) & PID=$!
           for i in $(seq 1 40); do
             if ! kill -0 "$PID" 2>/dev/null; then break; fi
             sleep 2
           done
           kill "$PID" 2>/dev/null || true
-          haxelib run lime --version 2>&1 | tail -5
+          echo "### lime --version（完整输出）"
+          haxelib run lime --version
+          echo "lime --version RC=$?"
+          echo "### lime 的 ndll"
+          LV=$(ls -d "$HAXELIB_ROOT/lime/"* 2>/dev/null | head -1)
+          ls -la "$LV/ndll/Linux64" 2>/dev/null || echo "!! 没有 ndll/Linux64"
+          {
+            echo '### lime --version 输出'
+            echo '```'
+            haxelib run lime --version 2>&1 | tail -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       - name: 编译 Android
         id: build
@@ -417,6 +500,23 @@ jobs:
           printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error::${line:0:900}"
           done
+          # 贴到摘要页
+          {
+            echo "## lime build android  RC=$RC  用时 $((END-START))s"
+            echo ""
+            echo '### Haxe 报错（.hx:行号）'
+            echo '```'
+            grep -E '\.hx:[0-9]+' build.log | tail -25 || echo '(无)'
+            echo '```'
+            echo '### NDK / 链接 / javac 报错'
+            echo '```'
+            grep -E 'Error [0-9]+$|Undefined symbols|ld: |error:|error |FAILURE|Execution failed' build.log | tail -30 || echo '(无)'
+            echo '```'
+            echo '### 日志尾部 50 行'
+            echo '```'
+            tail -50 build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           APK=$(find export -maxdepth 8 -name "*.apk" -type f | head -n 1)
           if [ -z "$APK" ]; then echo "### 没有 .apk 产物 ###"; exit 1; fi
           echo "产物: $APK"
