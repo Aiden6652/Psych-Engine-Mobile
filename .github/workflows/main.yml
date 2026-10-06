@@ -143,14 +143,19 @@ jobs:
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
 
-          # ⚠ 必须把 hxcpp 重新锁回 git 版！
-          #   hxvlc 的 haxelib.json 声明了 `hxcpp: 4.3.2`，haxelib install hxvlc
-          #   会顺手把 hxcpp 4.3.2 装上来，把前面 `haxelib git hxcpp` 覆盖掉。
-          #   这个 fork 才是 lime 8.2.2 配套的那份 —— 一旦被 4.3.2 顶掉，
-          #   `haxelib run lime` 就起不来（静默退出 / build.log 0 字节）。
-          haxelib set hxcpp git 2>/dev/null || haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
-          echo "## hxcpp 版本确认（必须是 git）"
-          haxelib list hxcpp
+          # ⚠ 必须在【所有依赖装完】之后把 hxcpp 重新装回 git fork！
+          #   两个 fork 的实际版本号：
+          #     · kittycathy233/hxcpp  → 4.3.0（lime 8.2.2 配套，能跑通）
+          #     · haxelib 官方        → 4.3.2（会被 hxvlc 的依赖声明拖进来）
+          #   hxvlc/haxelib.json 里声明了 `hxcpp: 4.3.2`，于是 `haxelib install hxvlc`
+          #   顺手把官方 4.3.2 装上，覆盖掉前面的 fork。
+          #   被顶掉之后 `haxelib run lime` 会【静默 RC=1、零输出】，
+          #   导致 build.log 是 0 字节 —— 看起来像"编译失败"，其实是 lime 根本没起来。
+          echo "## 重锁 hxcpp 回 git fork（4.3.0）"
+          rm -rf "$HAXELIB_ROOT/hxcpp"
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          echo "## hxcpp 实际版本（应为 4.3.0）"
+          grep -m1 '"version"' "$HAXELIB_ROOT/hxcpp/git/haxelib.json" || haxelib list hxcpp
 
           haxelib list
 
@@ -451,14 +456,19 @@ jobs:
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
 
-          # ⚠ 必须把 hxcpp 重新锁回 git 版！
-          #   hxvlc 的 haxelib.json 声明了 `hxcpp: 4.3.2`，haxelib install hxvlc
-          #   会顺手把 hxcpp 4.3.2 装上来，把前面 `haxelib git hxcpp` 覆盖掉。
-          #   这个 fork 才是 lime 8.2.2 配套的那份 —— 一旦被 4.3.2 顶掉，
-          #   `haxelib run lime` 就起不来（静默退出 / build.log 0 字节）。
-          haxelib set hxcpp git 2>/dev/null || haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
-          echo "## hxcpp 版本确认（必须是 git）"
-          haxelib list hxcpp
+          # ⚠ 必须在【所有依赖装完】之后把 hxcpp 重新装回 git fork！
+          #   两个 fork 的实际版本号：
+          #     · kittycathy233/hxcpp  → 4.3.0（lime 8.2.2 配套，能跑通）
+          #     · haxelib 官方        → 4.3.2（会被 hxvlc 的依赖声明拖进来）
+          #   hxvlc/haxelib.json 里声明了 `hxcpp: 4.3.2`，于是 `haxelib install hxvlc`
+          #   顺手把官方 4.3.2 装上，覆盖掉前面的 fork。
+          #   被顶掉之后 `haxelib run lime` 会【静默 RC=1、零输出】，
+          #   导致 build.log 是 0 字节 —— 看起来像"编译失败"，其实是 lime 根本没起来。
+          echo "## 重锁 hxcpp 回 git fork（4.3.0）"
+          rm -rf "$HAXELIB_ROOT/hxcpp"
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          echo "## hxcpp 实际版本（应为 4.3.0）"
+          grep -m1 '"version"' "$HAXELIB_ROOT/hxcpp/git/haxelib.json" || haxelib list hxcpp
 
           haxelib list
 
