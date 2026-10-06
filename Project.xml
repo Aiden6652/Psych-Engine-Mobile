@@ -131,7 +131,11 @@
 	<!-- video: use hxvlc (ships iOS static libs). Do NOT use hxCodec: on iOS it links a libvlc.a that was never shipped -->
 	<haxelib name="hxvlc" if="VIDEOS_ALLOWED"/>
 	<haxelib name="linc_luajit" if="LUA_ALLOWED"/>
-        <haxelib name="extension-androidtools" if="android"/>
+	<!-- [MOBILE] 不要在这里引 extension-androidtools！
+	     lime 8.2.2 已经内置了它，再引一次会报：
+	       The haxelib 'extension-androidtools' is already included in this Lime.
+	       Please remove it from the project file to compile.
+	     （hmm.json 里保留它没关系，那是给本地 haxelib 环境用的。） -->
 	<haxelib name="faxe" if='switch'/>
 	<!--<haxelib name="polymod"/> -->
 	<haxelib name="discord_rpc" if="desktop"/>
