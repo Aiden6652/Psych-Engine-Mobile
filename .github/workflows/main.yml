@@ -422,6 +422,37 @@ jobs:
           echo "ANDROID_NDK=$NDK_ROOT" >> "$GITHUB_ENV"
           ls "$NDK_ROOT" | head
 
+          # ⚠⚠ 必须显式指定 PLATFORM=android-21，否则 arm64 编不过！
+          #
+          #   根因：hxcpp 的 toolchain/android-toolchain-gcc.xml 里，arm64 段把
+          #   PLATFORM 默认成了 android-19：
+          #       <section if="HXCPP_ARM64">
+          #         <set name="PLATFORM" value="android-19" unless="PLATFORM" />
+          #   但 NDK r15c 的 platforms/android-19/ 里【根本没有 arch-arm64】：
+          #       platforms/android-19/ → arch-arm, arch-mips, arch-x86   ← 没 arm64
+          #       platforms/android-21/ → arch-arm, arch-arm64, ...       ← 有
+          #   于是编译命令拼出来的 --sysroot 指向不存在的目录：
+          #       --sysroot=$NDK/platforms/android-19/arch-arm64
+          #   后果就是 GCC 报：
+          #       .../gcc/aarch64-linux-android/4.9.x/include/stdint.h:9:26:
+          #       fatal error: stdint.h: No such file or directory
+          #        # include_next <stdint.h>
+          #       Error: Could not create PCH
+          #   （那个目录下的 stdint.h 用 #include_next 找 sysroot 里的下一个
+          #    stdint.h，sysroot 指错了自然找不到。）
+          #
+          #   修法：hxcpp 会把整个环境变量表灌进它的 defines
+          #   （tools/hxcpp/BuildTool.hx: env.keys() → defines.set(e, Sys.getEnv(e))），
+          #   而 Setup.globallySetThePlatform 里是
+          #       if (!defines.exists("PLATFORM")) { 自动探测最新版本 }
+          #   所以只要环境里有 PLATFORM，模板的 unless="PLATFORM" 就不生效，
+          #   直接采用我们指定的值。
+          #   android-21 是 arm64 的最低 API，且 platforms/android-21/arch-arm64/
+          #   usr/include/stdint.h 确实存在。armv7 用同一个值也没问题
+          #   （platforms/android-21/arch-arm/usr/include/stdint.h 同样存在）。
+          echo "PLATFORM=android-21" >> "$GITHUB_ENV"
+          echo "## 已指定 PLATFORM=android-21（arm64 必需）"
+
       - name: 安装 Haxe 4.2.4 与 neko
         run: |
           set -Eeuo pipefail
