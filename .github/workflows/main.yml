@@ -142,6 +142,16 @@ jobs:
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+
+          # ⚠ 必须把 hxcpp 重新锁回 git 版！
+          #   hxvlc 的 haxelib.json 声明了 `hxcpp: 4.3.2`，haxelib install hxvlc
+          #   会顺手把 hxcpp 4.3.2 装上来，把前面 `haxelib git hxcpp` 覆盖掉。
+          #   这个 fork 才是 lime 8.2.2 配套的那份 —— 一旦被 4.3.2 顶掉，
+          #   `haxelib run lime` 就起不来（静默退出 / build.log 0 字节）。
+          haxelib set hxcpp git 2>/dev/null || haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          echo "## hxcpp 版本确认（必须是 git）"
+          haxelib list hxcpp
+
           haxelib list
 
       - name: 自检 hxvlc
@@ -380,7 +390,11 @@ jobs:
           tar -xzf /tmp/neko.tar.gz -C "$HOME/neko"
           NEKO_DIR="$(find "$HOME/neko" -maxdepth 1 -type d -name 'neko-*' | head -1)"
           echo "$NEKO_DIR" >> "$GITHUB_PATH"
-          echo "LD_LIBRARY_PATH=$NEKO_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          # ⚠ Linux 上 LD_LIBRARY_PATH 默认是【未定义】的，直接引用会被
+          #   `set -u` 判为 unbound variable 而整个步骤失败：
+          #     line 18: LD_LIBRARY_PATH: unbound variable
+          #   所以这里必须先给默认值。
+          echo "LD_LIBRARY_PATH=${NEKO_DIR}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "NEKOPATH=$NEKO_DIR" >> "$GITHUB_ENV"
           "$HAXE_DIR/haxe" -version
           "$NEKO_DIR/neko" -version
@@ -436,6 +450,16 @@ jobs:
           haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
           haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
           haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+
+          # ⚠ 必须把 hxcpp 重新锁回 git 版！
+          #   hxvlc 的 haxelib.json 声明了 `hxcpp: 4.3.2`，haxelib install hxvlc
+          #   会顺手把 hxcpp 4.3.2 装上来，把前面 `haxelib git hxcpp` 覆盖掉。
+          #   这个 fork 才是 lime 8.2.2 配套的那份 —— 一旦被 4.3.2 顶掉，
+          #   `haxelib run lime` 就起不来（静默退出 / build.log 0 字节）。
+          haxelib set hxcpp git 2>/dev/null || haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          echo "## hxcpp 版本确认（必须是 git）"
+          haxelib list hxcpp
+
           haxelib list
 
       - name: 自检 hxvlc（确认 Android 原生库在）
