@@ -32,10 +32,9 @@ jobs:
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
 
     steps:
-      - name: 拉取仓库代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 恢复仓库自带的素材（assets / example_mods）
+      - name: 恢复仓库自带 assets / example_mods
         run: |
           set -Eeuo pipefail
           rm -rf assets resources.zip assets/preload/resources.zip mods
@@ -43,7 +42,7 @@ jobs:
           git checkout -f HEAD -- example_mods
           echo "assets 文件数: $(find assets -type f | wc -l)"
 
-      - name: 修补 Lua：错误的 setProperty 不再让游戏崩溃（只记日志）
+      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
         run: |
           set -Eeuo pipefail
           python3 tools/patch_lua_guard.py
@@ -83,7 +82,7 @@ jobs:
           fi
           echo "OK：zip 内无 mods"
 
-      - name: 缓存 haxelib 依赖库
+      - name: 缓存 haxelib 库
         uses: actions/cache@v4
         with:
           path: _haxelib
@@ -108,7 +107,7 @@ jobs:
           sudo installer -pkg haxe.pkg -target /
           haxe -version
 
-      - name: 配置 haxelib 仓库路径
+      - name: 配置 haxelib
         run: |
           set -Eeuo pipefail
           mkdir -p "$HAXELIB_ROOT"
@@ -116,23 +115,16 @@ jobs:
           mkdir -p "$HXCPP_COMPILE_CACHE"
           du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
 
-      - name: 安装项目依赖（Haxe 库）
+      - name: 安装依赖
         run: |
           set -Eeuo pipefail
-          # ⚠⚠ 全部加 --skip-dependencies！
-          #   haxelib 会自动解析并安装每个库声明的依赖，而这些"顺带装"的包
-          #   全是巨型 haxelib 包，在 runner 上会断流：
-          #     · haxelib git hxcpp  → 拖进 lime 8.3.2（185MB，带全平台二进制）
-          #     · haxelib install hxvlc → 拖进 hxcpp 4.3.2（顶掉我们的 git fork）
-          #   实测 iOS 侧就死在 lime 8.3.2 的 185.57MB 下载上（卡在 98%）。
-          #   我们本来就手工装齐了每一个依赖，压根不需要它再解析一遍。
-          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main --skip-dependencies
-          haxelib install openfl 9.1.0 --always --skip-dependencies
-          haxelib install flixel 4.11.0 --always --skip-dependencies
-          haxelib install flixel-addons 2.11.0 --always --skip-dependencies
-          haxelib install flixel-ui 2.4.0 --always --skip-dependencies
-          haxelib install hscript 2.4.0 --always --skip-dependencies
-          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main --skip-dependencies
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
+          haxelib install openfl 9.1.0 --always
+          haxelib install flixel 4.11.0 --always
+          haxelib install flixel-addons 2.11.0 --always
+          haxelib install flixel-ui 2.4.0 --always
+          haxelib install hscript 2.4.0 --always
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
 
           # hxvlc 版本选择（反复踩坑后的结论）：
           #   * 1.7 / 1.8.x：没有 GPU 渲染路径（bitmap.forceRendering / 纹理）
@@ -140,58 +132,20 @@ jobs:
           #   * 1.9.4+ / 2.x：用了 Haxe 4.3 的 `?.` 安全导航语法 → Haxe 4.2.4 语法报错；
           #   * 1.9.3：既有 forceRendering，又是 if(bitmap != null) 写法，发布在
           #     2024-06-30 PR #57（android/ios libs include visual module）之后 → 正好可用。
-          echo "## hxvlc 1.9.3（curl 断点续传 + 本地离线安装）"
-          # 说明同安卓侧：hxvlc 的 zip 有 212MB，haxelib 自带下载器会中途断流。
-          HXVLC_ZIP="$RUNNER_TEMP/hxvlc-1.9.3.zip"
-          HXVLC_URL="https://lib.haxe.org/files/3.0/hxvlc-1,9,3.zip"
-          rm -f "$HXVLC_ZIP"
-          ok=0
-          for i in 1 2 3 4 5 6; do
-            echo "── 第 $i 次尝试下载 hxvlc zip ──"
-            if curl -fL --retry 8 --retry-all-errors --retry-delay 5 \
-                    -C - --connect-timeout 30 --max-time 2400 \
-                    "$HXVLC_URL" -o "$HXVLC_ZIP"; then
-              if unzip -tq "$HXVLC_ZIP" >/dev/null 2>&1; then ok=1; break; fi
-              echo "!! zip 完整性校验没过，删掉重下"
-              rm -f "$HXVLC_ZIP"
-            fi
-          done
-          if [ "$ok" != "1" ]; then echo "### hxvlc zip 下载失败（6 次都断了）"; exit 1; fi
-          ls -l "$HXVLC_ZIP"
-          echo "## 离线安装 hxvlc"
-          haxelib install "$HXVLC_ZIP" --always --skip-dependencies
+          echo "## hxvlc 1.9.3"
+          rm -rf "$HAXELIB_ROOT/hxvlc"
+          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
           haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
           haxelib remove linc_luajit || true
-          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master --skip-dependencies || echo "skip linc_luajit"
-          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main --skip-dependencies || echo "skip hxShaders"
-          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master --skip-dependencies || echo "skip discord_rpc"
-          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main --skip-dependencies || echo "skip androidtools"
-
-          # ⚠ 必须在【所有依赖装完】之后把 hxcpp 切回 git fork！
-          #   两个 hxcpp 的实际版本号：
-          #     · kittycathy233/hxcpp  → 4.3.0（lime 8.2.2 配套，能跑通）
-          #     · haxelib 官方        → 4.3.2（会被 hxvlc 的依赖声明拖进来）
-          #   hxvlc/haxelib.json 声明了 `hxcpp: 4.3.2`，`haxelib install hxvlc`
-          #   会顺手把官方 4.3.2 装上并让它成为默认版本，把 fork 挤掉。
-          #   被顶掉后 `haxelib run lime` 会【静默 RC=1、零输出】，
-          #   build.log 落到 0 字节 —— 看着像"编译失败"，其实是 lime 根本没起来。
-          #
-          #   ⚠ 千万【不要】rm -rf "$HAXELIB_ROOT/hxcpp" 再重装：
-          #     那样会把 haxelib 的版本注册表搞坏，`haxelib list hxcpp` 只剩
-          #     `hxcpp: [git]`（版本号空），lime 更起不来。
-          #     正确做法是直接 `haxelib set` 切回已有的 git 版本。
-          echo "## 把 hxcpp 切回 git fork（4.3.0）"
-          haxelib list hxcpp
-          haxelib set hxcpp git || haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
-          echo "## hxcpp 现在的实际版本（必须带 4.3.0，不能是空）"
-          haxelib list hxcpp
-          grep -m1 '"version"' "$HAXELIB_ROOT/hxcpp/git/haxelib.json" || true
-
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
           haxelib list
 
-      - name: 自检视频库 hxvlc
+      - name: 自检 hxvlc
         run: |
           set +e
           haxelib path hxvlc
@@ -202,56 +156,18 @@ jobs:
           echo "### FlxVideoSprite 是否使用 ?. 语法（应为空）"
           grep -n '\?\.[a-zA-Z]' "$HV/source/hxvlc/flixel/FlxVideoSprite.hx" || echo "（无，OK）"
 
-      - name: 初始化 lime（iOS）
+      - name: 初始化 lime
         run: |
           set +e
-          echo "### haxelib 版本"
-          haxelib version
-          echo "### hxcpp 版本（必须是 4.3.0，不能是空）"
-          haxelib list hxcpp
-          echo "### lime 位置"
-          haxelib path lime
-          echo "### lime 目录实际内容"
-          ls -la "$HAXELIB_ROOT/lime/" 2>&1 | head -20
-
-          # lime setup 在 iOS 上会问 Xcode 路径这类问题。
-          # 之前用 </dev/null 会让它读到 EOF 直接退出（静默 RC=1），
-          # 这里用 printf 喂空行（表示"用默认值"）。
-          echo "### 跑 lime setup（喂空行用默认值）"
-          printf '\n\n\n\n\n' | haxelib run lime setup 2>&1 | tail -30
-          echo "lime setup RC=${PIPESTATUS[0]:-?}"
-
-          echo "### lime --version（完整输出，含 stderr）"
-          haxelib run lime --version 2>&1
-          echo "lime --version RC=$?"
-
-          echo "### lime 的 ndll 是否已生成（关键：lime 自己有没有编译出来）"
-          for d in "$HAXELIB_ROOT/lime/git" "$HAXELIB_ROOT/lime"/*; do
-            [ -d "$d/ndll" ] && { echo "找到 ndll: $d/ndll"; ls -la "$d/ndll/Mac64" 2>&1 | head; }
+          ( haxelib run lime setup </dev/null ) & PID=$!
+          for i in $(seq 1 30); do
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 2
           done
-          ls -la "$HAXELIB_ROOT/lime/git/ndll/Mac64" 2>/dev/null || echo "!! 没有 ndll/Mac64"
+          kill "$PID" 2>/dev/null || true
+          haxelib run lime --version 2>&1 | tail -5
 
-          {
-            echo '## iOS：lime 初始化诊断'
-            echo '### lime 目录'
-            echo '```'
-            ls -la "$HAXELIB_ROOT/lime/" 2>&1 | head -20
-            echo '```'
-            echo '### lime setup'
-            echo '```'
-            printf '\n\n\n\n\n' | haxelib run lime setup 2>&1 | tail -30
-            echo '```'
-            echo '### lime --version（含 stderr）'
-            echo '```'
-            haxelib run lime --version 2>&1 | tail -30
-            echo '```'
-            echo '### lime ndll'
-            echo '```'
-            ls -la "$HAXELIB_ROOT/lime/git/ndll/Mac64" 2>&1 | head -20
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-
-      - name: 选择 Xcode 版本
+      - name: 选择 Xcode
         run: |
           set +e
           XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
@@ -280,23 +196,6 @@ jobs:
           printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error::${line:0:900}"
           done
-          # 把错误同时贴到摘要页，省得每次都要下几十 MB 日志
-          {
-            echo "## lime build ios  RC=$RC  用时 $((END-START))s"
-            echo ""
-            echo '### Haxe 报错（.hx:行号）'
-            echo '```'
-            grep -E '\.hx:[0-9]+' build.log | tail -25 || echo '(无)'
-            echo '```'
-            echo '### 链接 / make 报错'
-            echo '```'
-            grep -E '^make: \*\*\*|Error [0-9]+$|Undefined symbols|ld: |clang' build.log | tail -25 || echo '(无)'
-            echo '```'
-            echo '### 日志尾部 40 行'
-            echo '```'
-            tail -40 build.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
           if [ -z "$APP" ]; then echo "### 没有 .app 产物 ###"; exit 1; fi
           echo "产物: $APP"
@@ -309,11 +208,11 @@ jobs:
           name: lime-build-log
           path: build.log
 
-      - name: 检查编译是否成功
+      - name: 检查构建结果
         if: steps.build.outcome == 'failure'
         run: exit 1
 
-      - name: 打包成 IPA
+      - name: 打包 IPA
         run: |
           set -Eeuo pipefail
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
@@ -338,17 +237,6 @@ jobs:
           path: PsychEngine_iOS_unsigned.ipa
           retention-days: 14
 
-  # ============================================================================
-  # Android 构建
-  # ============================================================================
-  # 与 iOS job 的关系：
-  #   · 源码完全相同（同一份 source/，含 hxcodec/VideoHandler.hx 兼容层）
-  #   · 目标平台不同 → Project.xml 里 VIDEOS_ALLOWED 已含 android
-  #   · 视频后端同为 hxvlc 1.9.3（该版本随库带 Android 的 libvlc-*.so）
-  #
-  # 工具链：JDK 11 + Android SDK (API 34 + Build-Tools 34) + NDK r15c
-  #   ⚠ NDK r15c 是老的，但与本仓库锁定的 hxcpp 以及 Lime 8 的默认工具链匹配，
-  #     不要随意升级（新版 NDK 去掉了 gcc、改了 STL 头，hxcpp 会编不过）。
   build-android:
     name: 安卓构建（Ubuntu）
     runs-on: ubuntu-latest
