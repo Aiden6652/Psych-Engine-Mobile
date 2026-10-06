@@ -1,0 +1,221 @@
+name: Psych Engine 0.6.3 iOS Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    timeout-minutes: 300
+    env:
+      HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
+      # hxcpp 按「源文件内容 + 编译参数」的哈希缓存每个 .o。
+      HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 恢复仓库自带 assets / example_mods
+        run: |
+          set -Eeuo pipefail
+          rm -rf assets resources.zip assets/preload/resources.zip mods
+          git checkout -f HEAD -- assets
+          git checkout -f HEAD -- example_mods
+          echo "assets 文件数: $(find assets -type f | wc -l)"
+
+      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
+        run: |
+          set -Eeuo pipefail
+          python3 tools/patch_lua_guard.py
+          grep -c "LuaGuard" source/FunkinLua.hx || true
+
+      - name: 打包内置资源 resources.zip（只放 assets，不放 mods）
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/pack
+          mkdir -p /tmp/pack/assets
+
+          # 解压后必须是 <Documents>/assets/<...>（例如 assets/music/freakyMenu.ogg），
+          # 不能多一层 preload。运行时 Paths.getPath()/returnSound() 全按 assets/… 找文件。
+          # 仓库里这些资源放在 assets/preload/ 下（OpenFL 的资源前缀），
+          # 所以要打 zip 时把 preload 里的内容平移到 assets/ 根下。
+          cp -R assets/preload/. /tmp/pack/assets/
+          # 字体在 assets/fonts（不在 preload 里），运行时按 assets/fonts/… 读，也要带上
+          if [ -d assets/fonts ]; then cp -R assets/fonts /tmp/pack/assets/fonts; fi
+
+          # ❗ 刻意不打包 example_mods！
+          # 之前把它当作 mods/ 一起解压，会导致：删掉重装后内置解压出一套
+          # 「只有 readme + pack.json 的空模组」，用户再放入自己的 mods 时就变成两套混合，
+          # 引擎可能把那个空模组当模组加载 → 直接崩。
+          # 现在 mods 目录改由 SUtil.ensureAssets() 解压后创建（空气泡即可），
+          # 用户的 mods 永远是干净的。
+
+          ( cd /tmp/pack && zip -qry /tmp/resources.zip assets )
+          mkdir -p assets/preload
+          mv /tmp/resources.zip assets/preload/resources.zip
+          ls -lh assets/preload/resources.zip
+          echo "### zip 内容抽样（应只有 assets/…，确认没有 preload 层也没有 mods）###"
+          unzip -l assets/preload/resources.zip | head -12
+          echo "### 确认 zip 里没有 mods ###"
+          if unzip -l assets/preload/resources.zip | grep -qE '^\s+[0-9]+\s+[0-9-]+\s+[0-9:]+\s+mods/'; then
+            echo "::error::resources.zip 里不应包含 mods，请检查打包步骤"
+            exit 1
+          fi
+          echo "OK：zip 内无 mods"
+
+      - name: 缓存 haxelib 库
+        uses: actions/cache@v4
+        with:
+          path: _haxelib
+          key: psych063-haxelib-v14
+          restore-keys: |
+            psych063-haxelib-
+
+      - name: 缓存 hxcpp 编译产物（提速关键）
+        uses: actions/cache@v4
+        with:
+          path: .hxcpp-cache
+          key: hxcpp-cache-haxe424-v2
+          restore-keys: |
+            hxcpp-cache-haxe424-
+
+      - name: 安装 Haxe 4.2.4（pkg 版，自带 neko）
+        run: |
+          set -Eeuo pipefail
+          curl -fL --retry 5 --retry-delay 5 https://github.com/HaxeFoundation/haxe/releases/download/4.2.4/haxe-4.2.4-osx-installer.pkg -o haxe.pkg
+          SZ=$(wc -c < haxe.pkg | tr -d ' ')
+          if [ "$SZ" -lt 1000000 ]; then echo "下载异常"; exit 1; fi
+          sudo installer -pkg haxe.pkg -target /
+          haxe -version
+
+      - name: 配置 haxelib
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HAXELIB_ROOT"
+          haxelib setup "$HAXELIB_ROOT"
+          mkdir -p "$HXCPP_COMPILE_CACHE"
+          du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
+
+      - name: 安装依赖
+        run: |
+          set -Eeuo pipefail
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
+          haxelib install openfl 9.1.0 --always
+          haxelib install flixel 4.11.0 --always
+          haxelib install flixel-addons 2.11.0 --always
+          haxelib install flixel-ui 2.4.0 --always
+          haxelib install hscript 2.4.0 --always
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+
+          # hxvlc 版本选择（反复踩坑后的结论）：
+          #   * 1.7 / 1.8.x：没有 GPU 渲染路径（bitmap.forceRendering / 纹理）
+          #     → 表现为「有声音、画面出不来」；
+          #   * 1.9.4+ / 2.x：用了 Haxe 4.3 的 `?.` 安全导航语法 → Haxe 4.2.4 语法报错；
+          #   * 1.9.3：既有 forceRendering，又是 if(bitmap != null) 写法，发布在
+          #     2024-06-30 PR #57（android/ios libs include visual module）之后 → 正好可用。
+          echo "## hxvlc 1.9.3"
+          rm -rf "$HAXELIB_ROOT/hxvlc"
+          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          haxelib set hxvlc 1.9.3
+
+          echo "## 可选依赖"
+          haxelib remove linc_luajit || true
+          haxelib git linc_luajit https://github.com/AndreiRudenko/linc_luajit.git master || echo "skip linc_luajit"
+          haxelib git hxShaders https://github.com/JonnycatMeow/hxShaders.git main || echo "skip hxShaders"
+          haxelib git discord_rpc https://github.com/Aidan63/linc_discord-rpc.git master || echo "skip discord_rpc"
+          haxelib git extension-androidtools https://github.com/MaysLastPlay77/extension-androidtools.git main || echo "skip androidtools"
+          haxelib list
+
+      - name: 自检 hxvlc
+        run: |
+          set +e
+          haxelib path hxvlc
+          HV=$(ls -d "$HAXELIB_ROOT/hxvlc/"* 2>/dev/null | head -1)
+          grep -m1 'version' "$HV/haxelib.json"
+          echo "### forceRendering 是否存在"
+          grep -n "forceRendering" "$HV/source/hxvlc/openfl/Video.hx" | head -3
+          echo "### FlxVideoSprite 是否使用 ?. 语法（应为空）"
+          grep -n '\?\.[a-zA-Z]' "$HV/source/hxvlc/flixel/FlxVideoSprite.hx" || echo "（无，OK）"
+
+      - name: 初始化 lime
+        run: |
+          set +e
+          ( haxelib run lime setup </dev/null ) & PID=$!
+          for i in $(seq 1 30); do
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          kill "$PID" 2>/dev/null || true
+          haxelib run lime --version 2>&1 | tail -5
+
+      - name: 选择 Xcode
+        run: |
+          set +e
+          XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
+          if [ -n "$XCODE_PATH" ]; then sudo xcode-select -s "$XCODE_PATH/Contents/Developer"; fi
+          xcodebuild -version
+
+      - name: 编译 iOS
+        id: build
+        continue-on-error: true
+        run: |
+          set +e
+          START=$(date +%s)
+          haxelib run lime build ios -release -nosign > build.log 2>&1
+          RC=$?
+          END=$(date +%s)
+          echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
+          echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
+          grep -c "Compiling" build.log || true
+          tail -60 build.log
+          echo "### Haxe 报错行（.hx:行号）###"
+          grep -nE '\.hx:[0-9]+' build.log | tail -40
+          echo "### 链接报错行 ###"
+          grep -nE '^make: \*\*\*|Error [0-9]+$|Undefined symbols|ld: ' build.log | tail -20
+          ERR="$(grep -E '\.hx:[0-9]+' build.log | tail -40)"
+          if [ -z "$ERR" ]; then ERR="$(tail -25 build.log)"; fi
+          printf '%s\n' "$ERR" | sed -e 's/\r//g' -e 's/%/%25/g' | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::${line:0:900}"
+          done
+          APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then echo "### 没有 .app 产物 ###"; exit 1; fi
+          echo "产物: $APP"
+          exit $RC
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lime-build-log
+          path: build.log
+
+      - name: 检查构建结果
+        if: steps.build.outcome == 'failure'
+        run: exit 1
+
+      - name: 打包 IPA
+        run: |
+          set -Eeuo pipefail
+          APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
+          echo "产物: $APP"
+          du -sh "$APP"
+          if [ ! -d "$APP/assets" ]; then echo "!! App 包里没有 assets"; exit 1; fi
+          if [ ! -f "$APP/assets/resources.zip" ]; then
+            cp -f assets/preload/resources.zip "$APP/assets/resources.zip"
+          fi
+          find "$APP" -name "*.mp4" -delete || true
+          rm -rf Payload *.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          find Payload -exec touch -t 202401010000 {} +
+          zip -qry PsychEngine_iOS_unsigned.ipa Payload
+          ls -lh *.ipa
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsychEngine_iOS_unsigned
+          path: PsychEngine_iOS_unsigned.ipa
+          retention-days: 14
