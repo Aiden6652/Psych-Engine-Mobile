@@ -1,4 +1,4 @@
-name: Psych Engine 0.6.3 Mobile Build (iOS + Android)
+name: 心理引擎 0.6.3 移动端构建（iOS + 安卓）
 
 on:
   push:
@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   build-ios:
+    name: iOS 构建（macOS 14）
     runs-on: macos-14
     timeout-minutes: 300
     env:
@@ -31,9 +32,10 @@ jobs:
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
 
-      - name: 恢复仓库自带 assets / example_mods
+      - name: 恢复仓库自带的素材（assets / example_mods）
         run: |
           set -Eeuo pipefail
           rm -rf assets resources.zip assets/preload/resources.zip mods
@@ -41,7 +43,7 @@ jobs:
           git checkout -f HEAD -- example_mods
           echo "assets 文件数: $(find assets -type f | wc -l)"
 
-      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
+      - name: 修补 Lua：错误的 setProperty 不再让游戏崩溃（只记日志）
         run: |
           set -Eeuo pipefail
           python3 tools/patch_lua_guard.py
@@ -81,7 +83,7 @@ jobs:
           fi
           echo "OK：zip 内无 mods"
 
-      - name: 缓存 haxelib 库
+      - name: 缓存 haxelib 依赖库
         uses: actions/cache@v4
         with:
           path: _haxelib
@@ -106,7 +108,7 @@ jobs:
           sudo installer -pkg haxe.pkg -target /
           haxe -version
 
-      - name: 配置 haxelib
+      - name: 配置 haxelib 仓库路径
         run: |
           set -Eeuo pipefail
           mkdir -p "$HAXELIB_ROOT"
@@ -114,7 +116,7 @@ jobs:
           mkdir -p "$HXCPP_COMPILE_CACHE"
           du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
 
-      - name: 安装依赖
+      - name: 安装项目依赖（Haxe 库）
         run: |
           set -Eeuo pipefail
           haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
@@ -165,7 +167,7 @@ jobs:
 
           haxelib list
 
-      - name: 自检 hxvlc
+      - name: 自检视频库 hxvlc
         run: |
           set +e
           haxelib path hxvlc
@@ -176,37 +178,56 @@ jobs:
           echo "### FlxVideoSprite 是否使用 ?. 语法（应为空）"
           grep -n '\?\.[a-zA-Z]' "$HV/source/hxvlc/flixel/FlxVideoSprite.hx" || echo "（无，OK）"
 
-      - name: 初始化 lime
+      - name: 初始化 lime（iOS）
         run: |
           set +e
-          echo "### haxelib 版本 / 路径"
+          echo "### haxelib 版本"
           haxelib version
+          echo "### hxcpp 版本（必须是 4.3.0，不能是空）"
+          haxelib list hxcpp
           echo "### lime 位置"
           haxelib path lime
-          echo "### hxcpp 版本"
-          haxelib list hxcpp
-          echo "### 跑 lime setup（最多 60s）"
-          ( haxelib run lime setup </dev/null ) & PID=$!
-          for i in $(seq 1 30); do
-            if ! kill -0 "$PID" 2>/dev/null; then break; fi
-            sleep 2
-          done
-          kill "$PID" 2>/dev/null || true
-          echo "### lime --version（完整输出，不吞 stderr）"
-          haxelib run lime --version
+          echo "### lime 目录实际内容"
+          ls -la "$HAXELIB_ROOT/lime/" 2>&1 | head -20
+
+          # lime setup 在 iOS 上会问 Xcode 路径这类问题。
+          # 之前用 </dev/null 会让它读到 EOF 直接退出（静默 RC=1），
+          # 这里用 printf 喂空行（表示"用默认值"）。
+          echo "### 跑 lime setup（喂空行用默认值）"
+          printf '\n\n\n\n\n' | haxelib run lime setup 2>&1 | tail -30
+          echo "lime setup RC=${PIPESTATUS[0]:-?}"
+
+          echo "### lime --version（完整输出，含 stderr）"
+          haxelib run lime --version 2>&1
           echo "lime --version RC=$?"
-          echo "### lime 的 ndll 是否已生成"
-          LV=$(ls -d "$HAXELIB_ROOT/lime/"* 2>/dev/null | head -1)
-          echo "lime dir: $LV"
-          ls -la "$LV/ndll/Mac64" 2>/dev/null || echo "!! 没有 ndll/Mac64（lime 没编译出来）"
+
+          echo "### lime 的 ndll 是否已生成（关键：lime 自己有没有编译出来）"
+          for d in "$HAXELIB_ROOT/lime/git" "$HAXELIB_ROOT/lime"/*; do
+            [ -d "$d/ndll" ] && { echo "找到 ndll: $d/ndll"; ls -la "$d/ndll/Mac64" 2>&1 | head; }
+          done
+          ls -la "$HAXELIB_ROOT/lime/git/ndll/Mac64" 2>/dev/null || echo "!! 没有 ndll/Mac64"
+
           {
-            echo '### lime --version 输出'
+            echo '## iOS：lime 初始化诊断'
+            echo '### lime 目录'
             echo '```'
-            haxelib run lime --version 2>&1 | tail -40
+            ls -la "$HAXELIB_ROOT/lime/" 2>&1 | head -20
+            echo '```'
+            echo '### lime setup'
+            echo '```'
+            printf '\n\n\n\n\n' | haxelib run lime setup 2>&1 | tail -30
+            echo '```'
+            echo '### lime --version（含 stderr）'
+            echo '```'
+            haxelib run lime --version 2>&1 | tail -30
+            echo '```'
+            echo '### lime ndll'
+            echo '```'
+            ls -la "$HAXELIB_ROOT/lime/git/ndll/Mac64" 2>&1 | head -20
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
-      - name: 选择 Xcode
+      - name: 选择 Xcode 版本
         run: |
           set +e
           XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -n 1)"
@@ -264,11 +285,11 @@ jobs:
           name: lime-build-log
           path: build.log
 
-      - name: 检查构建结果
+      - name: 检查编译是否成功
         if: steps.build.outcome == 'failure'
         run: exit 1
 
-      - name: 打包 IPA
+      - name: 打包成 IPA
         run: |
           set -Eeuo pipefail
           APP=$(find export -maxdepth 8 -name "*.app" -type d | head -n 1)
@@ -305,6 +326,7 @@ jobs:
   #   ⚠ NDK r15c 是老的，但与本仓库锁定的 hxcpp 以及 Lime 8 的默认工具链匹配，
   #     不要随意升级（新版 NDK 去掉了 gcc、改了 STL 头，hxcpp 会编不过）。
   build-android:
+    name: 安卓构建（Ubuntu）
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -312,9 +334,10 @@ jobs:
       HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
 
-      - name: 恢复仓库自带 assets / example_mods
+      - name: 恢复仓库自带的素材（assets / example_mods）
         run: |
           set -Eeuo pipefail
           rm -rf assets resources.zip assets/preload/resources.zip mods
@@ -322,7 +345,7 @@ jobs:
           git checkout -f HEAD -- example_mods
           echo "assets 文件数: $(find assets -type f | wc -l)"
 
-      - name: 加固 Lua：错误的 setProperty 不再崩游戏（只记日志）
+      - name: 修补 Lua：错误的 setProperty 不再让游戏崩溃（只记日志）
         run: |
           set -Eeuo pipefail
           python3 tools/patch_lua_guard.py
@@ -334,7 +357,7 @@ jobs:
       #   并让整个 job 挂掉。
       #   所以先用 runner 自带的 JDK 17 把 SDK 装完，再切回 JDK 11 给 Gradle 用
       #   （Gradle 7.5.1 不支持 17+）。
-      - name: 安装 Android SDK（此时用 runner 自带 JDK 17）
+      - name: 安装安卓 SDK（这一步用系统自带的 JDK 17）
         run: |
           set -Eeuo pipefail
           echo "当前 java: $(java -version 2>&1 | head -1)"
@@ -345,7 +368,7 @@ jobs:
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      - name: 确认 SDK 就绪
+      - name: 确认安卓 SDK 就绪
         run: |
           set -Eeuo pipefail
           echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
@@ -353,14 +376,14 @@ jobs:
           ls "${ANDROID_HOME}/platforms" || true
           ls "${ANDROID_HOME}/build-tools" || true
 
-      - name: 切到 JDK 11（Gradle 7.5.1 需要）
+      - name: 切换回 JDK 11（Gradle 7.5.1 只能用 11）
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '11'
           java-package: jdk
 
-      - name: 确认 JDK 11 生效
+      - name: 确认 JDK 11 已生效
         run: |
           set -Eeuo pipefail
           java -version
@@ -368,7 +391,7 @@ jobs:
           # sdkmanager 若被后续步骤调用会再次需要 17，这里禁掉版本检查
           echo "SKIP_JDK_VERSION_CHECK=1" >> "$GITHUB_ENV"
 
-      - name: 安装 Android NDK r15c
+      - name: 安装安卓 NDK r15c
         run: |
           set -Eeuo pipefail
           NDK_URL="https://dl.google.com/android/repository/android-ndk-r15c-linux-x86_64.zip"
@@ -382,7 +405,7 @@ jobs:
           echo "ANDROID_NDK=$NDK_ROOT" >> "$GITHUB_ENV"
           ls "$NDK_ROOT" | head
 
-      - name: 安装 Haxe 4.2.4
+      - name: 安装 Haxe 4.2.4 与 neko
         run: |
           set -Eeuo pipefail
           # ⚠ 必须 4.2.4（不是 4.2.5、更不是 4.3）：
@@ -410,7 +433,7 @@ jobs:
           "$HAXE_DIR/haxe" -version
           "$NEKO_DIR/neko" -version
 
-      - name: 配置 haxelib
+      - name: 配置 haxelib 仓库路径
         run: |
           set -Eeuo pipefail
           mkdir -p "$HAXELIB_ROOT"
@@ -418,7 +441,7 @@ jobs:
           mkdir -p "$HXCPP_COMPILE_CACHE"
           du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
 
-      - name: 缓存 haxelib 库
+      - name: 缓存 haxelib 依赖库
         uses: actions/cache@v4
         with:
           path: _haxelib
@@ -434,7 +457,7 @@ jobs:
           restore-keys: |
             hxcpp-android-cache-haxe424-
 
-      - name: 安装依赖
+      - name: 安装项目依赖（Haxe 库）
         run: |
           set -Eeuo pipefail
           haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
@@ -484,7 +507,7 @@ jobs:
 
           haxelib list
 
-      - name: 自检 hxvlc（确认 Android 原生库在）
+      - name: 自检视频库 hxvlc（确认 Android 原生库在）
         run: |
           set +e
           HV=$(ls -d "$HAXELIB_ROOT/hxvlc/"* 2>/dev/null | head -1)
@@ -497,44 +520,66 @@ jobs:
           echo "### forceRendering 是否存在 ###"
           grep -n "forceRendering" "$HV/source/hxvlc/openfl/Video.hx" | head -3
 
-      - name: 初始化 lime（Android）
+      - name: 初始化 lime（安卓）
         run: |
           set +e
+          echo "### hxcpp 版本（必须是 4.3.0，不能是空）"
+          haxelib list hxcpp
           echo "### lime 位置"
           haxelib path lime
-          echo "### hxcpp 版本"
-          haxelib list hxcpp
-          # ⚠ 不要用 `yes | haxelib run lime setup android`！
-          #   lime setup 会交互式询问 SDK/NDK 路径，`yes` 灌进去的 'y' 会被
-          #   当成路径存下来，编译时报：
+
+          # ⚠ 为什么不能简单 `yes | haxelib run lime setup android`：
+          #   lime setup 会挨个问 SDK / NDK / JDK 路径，`yes` 只会灌 'y'，
+          #   那个 'y' 被当成路径答案存下来 → 报
           #     Error: Cannot find directory "y/build-tools/"
-          #   正确做法是用 lime 的配置命令把路径写死，全程无交互。
-          echo "### 写死 SDK / NDK 路径（不交互）"
-          haxelib run lime config ANDROID_SDK "$ANDROID_HOME"
-          haxelib run lime config ANDROID_NDK_ROOT "$ANDROID_NDK_ROOT"
-          haxelib run lime config JAVA_HOME "$JAVA_HOME"
-          echo "### 确认写入的配置"
+          #
+          # ⚠ 为什么也不能只用 `lime config`：
+          #   config 只写配置项，不会生成 lime 认的「SDK 已安装」标记 →
+          #   报 Error: You need to run "lime setup android" before you can use the Android target
+          #
+          # 正确做法：用 printf 按顺序喂【真实路径】，把三个问题一次答完。
+          echo "### 非交互式跑 lime setup android（喂真实路径）"
+          printf '%s\n%s\n%s\n' \
+            "$ANDROID_HOME" \
+            "$ANDROID_NDK_ROOT" \
+            "$JAVA_HOME" \
+            | haxelib run lime setup android 2>&1 | tail -30
+          echo "lime setup android RC=${PIPESTATUS[0]:-?}"
+
+          echo "### 兜底：再用 lime config 把路径写死一遍"
+          haxelib run lime config ANDROID_SDK "$ANDROID_HOME" 2>&1 | tail -3
+          haxelib run lime config ANDROID_NDK_ROOT "$ANDROID_NDK_ROOT" 2>&1 | tail -3
+          haxelib run lime config JAVA_HOME "$JAVA_HOME" 2>&1 | tail -3
+
+          echo "### 确认 lime 配置"
           haxelib run lime config 2>&1 | tee /tmp/lime_cfg.txt | head -40
+
+          echo "### lime --version（完整输出，含 stderr）"
+          haxelib run lime --version 2>&1
+          echo "lime --version RC=$?"
+
+          echo "### lime 的 ndll（有 .ndll 才说明 lime 自己编译成功了）"
+          ls -la "$HAXELIB_ROOT/lime/git/ndll/Linux64" 2>/dev/null \
+            || ls -la "$HAXELIB_ROOT/lime"/*/ndll/Linux64 2>/dev/null \
+            || echo "!! 找不到 ndll/Linux64"
+
           {
+            echo '## 安卓：lime 初始化诊断'
             echo '### lime config'
             echo '```'
-            cat /tmp/lime_cfg.txt
+            cat /tmp/lime_cfg.txt 2>/dev/null | head -50
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          echo "### lime --version（完整输出）"
-          haxelib run lime --version
-          echo "lime --version RC=$?"
-          echo "### lime 的 ndll"
-          LV=$(ls -d "$HAXELIB_ROOT/lime/"* 2>/dev/null | head -1)
-          ls -la "$LV/ndll/Linux64" 2>/dev/null || echo "!! 没有 ndll/Linux64"
-          {
-            echo '### lime --version 输出'
+            echo '### lime --version'
             echo '```'
-            haxelib run lime --version 2>&1 | tail -40
+            haxelib run lime --version 2>&1 | tail -30
+            echo '```'
+            echo '### lime ndll 目录'
+            echo '```'
+            ls -la "$HAXELIB_ROOT/lime/git/ndll/Linux64" 2>&1 | head -20
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
-      - name: 编译 Android
+      - name: 编译安卓
         id: build
         continue-on-error: true
         run: |
@@ -585,11 +630,11 @@ jobs:
           name: lime-build-log-android
           path: build.log
 
-      - name: 检查构建结果
+      - name: 检查编译是否成功
         if: steps.build.outcome == 'failure'
         run: exit 1
 
-      - name: 整理 APK 产物
+      - name: 整理出 APK 成品
         run: |
           set -Eeuo pipefail
           APK=$(find export -maxdepth 8 -name "*.apk" -type f | head -n 1)
