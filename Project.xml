@@ -55,6 +55,35 @@
 	     ⚠ 不要再用 hxCodec：iOS 上它链的 libvlc.a 从未随库发布；安卓上它的原生扩展
 	       与 Lime/OpenFL 这条链不兼容。—— 上游注释也是同一个结论。 -->
 	<define name="VIDEOS_ALLOWED" if="web || windows || ios || android" />
+
+	<!-- [MOBILE] 必须定义！否则 openfl 9.1.0 和 hxvlc 1.9.3 都编不过。
+	     lime 里 onUpdate 是这样声明的（lime/app/Application.hx:57）：
+	         public var onUpdate = new Event<#if lime_use_old_deltatime Int #else Float #end->Void>();
+	     也就是：不定义这个宏 ⇒ onUpdate 是 Event<Float->Void>；
+	              定义了         ⇒ onUpdate 是 Event<Int->Void>。
+
+	     而 openfl 和 hxvlc 的回调都按【老式 Int】写的：
+	         · openfl/9,1,0/src/openfl/display/Stage.hx:2147
+	               __onLimeUpdate(deltaTime:Int)
+	               → Stage.hx:2893 application.onUpdate.add(__onLimeUpdate)
+	               → Stage.hx:3062 application.onUpdate.remove(__onLimeUpdate)
+	         · hxvlc/1,9,3/source/hxvlc/openfl/Video.hx:1087
+	               update(deltaTime:Int)
+	               → Video.hx:627  Lib.application.onUpdate.add(update)
+	               → Video.hx:1007 Lib.application.onUpdate.remove(update)
+
+	     于是报错长这样（四条全是同一个根因）：
+	         hxvlc/openfl/Video.hx:627:  error: Float should be Int
+	         hxvlc/openfl/Video.hx:1007: error: Float should be Int
+	         openfl/display/Stage.hx:2893: error: Float should be Int
+	         openfl/display/Stage.hx:3062: error: Float should be Int
+	     「应该给 Int 但你在给 Float」——指的就是把 Int->Void 的回调
+	     塞进 Float->Void 的 Event 里，类型对不上。
+
+	     Psych Engine 自己不用 lime 的 onUpdate（只用 FlxG 的），
+	     所以开这个宏不会影响引擎其它地方。 -->
+	<define name="lime_use_old_deltatime" />
+
 	<section if="ios">
 		<architecture name="arm64" />
 	</section>
