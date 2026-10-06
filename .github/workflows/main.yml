@@ -520,6 +520,33 @@ jobs:
           echo "### forceRendering 是否存在 ###"
           grep -n "forceRendering" "$HV/source/hxvlc/openfl/Video.hx" | head -3
 
+      # ⚠ lime 8.2.2 内置了 extension-androidtools 的 Java 扩展，直接
+      #   <haxelib name="extension-androidtools"/> 会报 "already included"。
+      #   但内置那份不带 android.Hardware / android.Tools 这些 Haxe 绑定类，
+      #   而源码又必须要 —— 所以把 haxelib 里的 Haxe 源码拷进项目，
+      #   用 <classpath path="extension-androidtools/src"/> 挂进来。
+      - name: 把 extension-androidtools 的 Haxe 源码拷进项目
+        run: |
+          set -Eeuo pipefail
+          ET=$(ls -d "$HAXELIB_ROOT/extension-androidtools/"* 2>/dev/null | head -1)
+          echo "haxelib 里的 extension-androidtools: $ET"
+          if [ -z "$ET" ] || [ ! -d "$ET/src/android" ]; then
+            echo "!! 找不到 $ET/src/android —— hmm 里的 extension-androidtools 没装上"
+            exit 1
+          fi
+          rm -rf extension-androidtools
+          mkdir -p extension-androidtools
+          cp -R "$ET/src" extension-androidtools/src
+          echo "### 拷进来的类 ###"
+          ls extension-androidtools/src/android/
+          ls extension-androidtools/src/android/os/ 2>/dev/null || true
+          {
+            echo '### extension-androidtools 源码（已拷入项目）'
+            echo '```'
+            find extension-androidtools -name '*.hx' | sort
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
       - name: 初始化 lime（安卓）
         run: |
           set +e
