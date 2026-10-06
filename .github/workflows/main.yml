@@ -1,4 +1,4 @@
-name: 心理引擎 0.6.3 移动端构建（iOS + 安卓）
+name: Psych Engine 0.6.3 移动端构建（iOS + 安卓）
 
 on:
   push:
