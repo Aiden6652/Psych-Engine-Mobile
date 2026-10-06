@@ -118,13 +118,13 @@ jobs:
       - name: 安装依赖
         run: |
           set -Eeuo pipefail
-          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main
-          haxelib install openfl 9.1.0 --always
-          haxelib install flixel 4.11.0 --always
-          haxelib install flixel-addons 2.11.0 --always
-          haxelib install flixel-ui 2.4.0 --always
-          haxelib install hscript 2.4.0 --always
-          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main
+          haxelib git lime https://github.com/PsychEngine-report/LIME-0.6.3-FIX main --skip-dependencies
+          haxelib install openfl 9.1.0 --always --skip-dependencies
+          haxelib install flixel 4.11.0 --always --skip-dependencies
+          haxelib install flixel-addons 2.11.0 --always --skip-dependencies
+          haxelib install flixel-ui 2.4.0 --always --skip-dependencies
+          haxelib install hscript 2.4.0 --always --skip-dependencies
+          haxelib git hxcpp https://github.com/kittycathy233/hxcpp main --skip-dependencies
 
           # hxvlc 版本选择（反复踩坑后的结论）：
           #   * 1.7 / 1.8.x：没有 GPU 渲染路径（bitmap.forceRendering / 纹理）
@@ -132,9 +132,31 @@ jobs:
           #   * 1.9.4+ / 2.x：用了 Haxe 4.3 的 `?.` 安全导航语法 → Haxe 4.2.4 语法报错；
           #   * 1.9.3：既有 forceRendering，又是 if(bitmap != null) 写法，发布在
           #     2024-06-30 PR #57（android/ios libs include visual module）之后 → 正好可用。
-          echo "## hxvlc 1.9.3"
+          # ⚠⚠ 千万不要用 `haxelib install hxvlc 1.9.3` 直接从网上拉！
+          #     hxvlc 1.9.3 的 zip 有 212MB，haxelib 自带下载器在 GitHub runner 上
+          #     会在 10% 左右断流，然后陷入「同一秒刷几百行 22.5MB/222.76MB (10%)」
+          #     的死循环，把整个 job 拖到超时（实测 #796 iOS job 就是这么死的）。
+          #     正确做法：curl 带断点续传 + 校验，下完再用本地 zip 离线安装。
+          echo "## hxvlc 1.9.3（curl 断点续传 + 本地离线安装）"
           rm -rf "$HAXELIB_ROOT/hxvlc"
-          haxelib install hxvlc 1.9.3 --always || { echo "### hxvlc 安装失败"; exit 1; }
+          HXVLC_ZIP="$RUNNER_TEMP/hxvlc-1.9.3.zip"
+          HXVLC_URL="https://lib.haxe.org/files/3.0/hxvlc-1,9,3.zip"
+          ok=0
+          for i in 1 2 3 4 5 6; do
+            echo "── 第 $i 次尝试下载 hxvlc zip ──"
+            if curl -fL --retry 8 --retry-all-errors --retry-delay 5 \
+                    -C - --connect-timeout 30 --max-time 2400 \
+                    "$HXVLC_URL" -o "$HXVLC_ZIP"; then
+              if unzip -tq "$HXVLC_ZIP" >/dev/null 2>&1; then ok=1; break; fi
+              echo "zip 校验失败，删掉重下"
+              rm -f "$HXVLC_ZIP"
+            fi
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then echo "### hxvlc zip 下载失败（6 次都断了）"; exit 1; fi
+          ls -lh "$HXVLC_ZIP"
+          echo "## 离线安装 hxvlc"
+          haxelib install "$HXVLC_ZIP" --always --skip-dependencies
           haxelib set hxvlc 1.9.3
 
           echo "## 可选依赖"
@@ -180,8 +202,14 @@ jobs:
         run: |
           set +e
           START=$(date +%s)
-          haxelib run lime build ios -release -nosign > build.log 2>&1
-          RC=$?
+          # ⚠ 用 tee 而不是 > build.log：
+          #   重定向会把所有输出吞进文件，CI 界面上只看到一个「编译中」转圈，
+          #   完全无法判断它是在编还是卡死（#796 就是这么盲等了 2h41）。
+          #   tee 让输出同时进日志文件和 CI 界面，配合 github-actions[bot] 的
+          #   行缓冲，能实时看到进度。
+          # ⚠ 再用 stdbuf 关掉管道缓冲，否则 tee 会把输出攒到结束才吐。
+          stdbuf -oL -eL haxelib run lime build ios -release -nosign 2>&1 | tee build.log
+          RC=${PIPESTATUS[0]}
           END=$(date +%s)
           echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
           echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
@@ -594,8 +622,13 @@ jobs:
         run: |
           set +e
           START=$(date +%s)
-          haxelib run lime build android -release > build.log 2>&1
-          RC=$?
+          # ⚠ 同 iOS：用 tee + stdbuf 让编译输出实时可见，
+          #   否则界面上只能看到一个「编译中」，无法判断是编还是卡死。
+          #   另外套 timeout 90m 兜底：真卡死时 90 分钟自动砍掉，
+          #   不会白白占着 300 分钟的 job 超时。
+          stdbuf -oL -eL timeout 90m haxelib run lime build android -release 2>&1 | tee build.log
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" = "124" ]; then echo "### 编译超时被 timeout 90m 砍掉（疑似卡死）###"; fi
           END=$(date +%s)
           echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
           echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
