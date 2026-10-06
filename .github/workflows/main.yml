@@ -271,7 +271,24 @@ jobs:
     timeout-minutes: 300
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
-      HXCPP_COMPILE_CACHE: ${{ github.workspace }}/.hxcpp-cache
+      # ⚠⚠ 安卓【绝对不能】开 HXCPP_COMPILE_CACHE！这是 hxcpp 在 gcc/NDK 下的 bug：
+      #
+      #   hxcpp/tools/hxcpp/Compiler.hx:getPchDir() 在缓存模式下会把 PCH 目录
+      #   换成 CompileCache.getPchDir(...)，也就是
+      #        .hxcpp-cache/haxe/pch2131c894/
+      #   而 precompile() 的 gcc 分支只做：
+      #        args.push("-o"); args.push(pch_name);          // 生成 hxcpp.h.gch
+      #        args.push(precompiledHeaderDir + "/hxcpp.h");  // 拿【正常目录】的头文件
+      #   于是 .gch 落进缓存目录，但 hxcpp.h 本体没被拷过去。
+      #   其他 .cpp 编译时 #include <.../pch2131c894/hxcpp.h> → 找不到 → 挂掉：
+      #        fatal error: .hxcpp-cache/haxe/pch2131c894/hxcpp.h: No such file or directory
+      #
+      #   实测 #797：15:14:06 开始建 PCH，15:14:13 就报这个错，
+      #   然后 hxcpp 的并行 make 不退出，硬挂 90 分钟被 timeout 砍掉（RC=124）。
+      #
+      #   iOS 不受影响：clang 走的是 mPCH != "gcc" 分支，会把头文件一起处理。
+      #   所以缓存只留给 iOS，安卓这边彻底不设这个变量。
+      # HXCPP_COMPILE_CACHE: ...
 
     steps:
       - name: 拉取仓库代码
@@ -409,8 +426,8 @@ jobs:
           set -Eeuo pipefail
           mkdir -p "$HAXELIB_ROOT"
           haxelib setup "$HAXELIB_ROOT"
-          mkdir -p "$HXCPP_COMPILE_CACHE"
-          du -sh "$HXCPP_COMPILE_CACHE" 2>/dev/null || true
+          # 安卓不设 HXCPP_COMPILE_CACHE（见 job env 里的说明），
+          # 所以这里不再 mkdir 缓存目录。
 
       - name: 缓存 haxelib 依赖库
         uses: actions/cache@v4
@@ -420,13 +437,10 @@ jobs:
           restore-keys: |
             psych063-android-haxelib-
 
-      - name: 缓存 hxcpp 编译产物（提速关键）
-        uses: actions/cache@v4
-        with:
-          path: .hxcpp-cache
-          key: hxcpp-android-cache-haxe424-v1
-          restore-keys: |
-            hxcpp-android-cache-haxe424-
+      # ⚠ 安卓这里【故意不做】hxcpp 编译缓存。
+      #   原因见 job env 里的长注释：hxcpp 在 gcc/NDK 下把 PCH 目录挪进缓存后，
+      #   hxcpp.h 本体不会被拷过去，导致 fatal error 并挂死。
+      #   iOS 侧（clang，mPCH != "gcc" 分支）不受影响，缓存只留给 iOS。
 
       - name: 安装项目依赖（Haxe 库）
         run: |
@@ -624,11 +638,12 @@ jobs:
           START=$(date +%s)
           # ⚠ 同 iOS：用 tee + stdbuf 让编译输出实时可见，
           #   否则界面上只能看到一个「编译中」，无法判断是编还是卡死。
-          #   另外套 timeout 90m 兜底：真卡死时 90 分钟自动砍掉，
-          #   不会白白占着 300 分钟的 job 超时。
-          stdbuf -oL -eL timeout 90m haxelib run lime build android -release 2>&1 | tee build.log
+          # ⚠ timeout 40m 兜底：正常 arm64 全量 C++ 编译约 20~30 分钟，
+          #   给到 40 分钟足够；万一再出现「报错后 hxcpp 并行 make 不退出」
+          #   的挂死（#797 挂了 90 分钟），40 分钟就能砍掉，损失可控。
+          stdbuf -oL -eL timeout 40m haxelib run lime build android -release 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
-          if [ "$RC" = "124" ]; then echo "### 编译超时被 timeout 90m 砍掉（疑似卡死）###"; fi
+          if [ "$RC" = "124" ]; then echo "### 编译超时被 timeout 40m 砍掉（疑似 hxcpp 报错后挂死）###"; fi
           END=$(date +%s)
           echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
           echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
