@@ -271,23 +271,40 @@ jobs:
     timeout-minutes: 300
     env:
       HAXELIB_ROOT: ${{ github.workspace }}/_haxelib
-      # ⚠⚠ 安卓【绝对不能】开 HXCPP_COMPILE_CACHE！这是 hxcpp 在 gcc/NDK 下的 bug：
+
+      # ⚠⚠⚠ 核心修复：关掉 hxcpp 的 PCH（预编译头）。这是 hxcpp 在 gcc/NDK 下的
+      #     一个真实 bug，会直接让安卓编译挂死。
       #
-      #   hxcpp/tools/hxcpp/Compiler.hx:getPchDir() 在缓存模式下会把 PCH 目录
-      #   换成 CompileCache.getPchDir(...)，也就是
-      #        .hxcpp-cache/haxe/pch2131c894/
-      #   而 precompile() 的 gcc 分支只做：
-      #        args.push("-o"); args.push(pch_name);          // 生成 hxcpp.h.gch
-      #        args.push(precompiledHeaderDir + "/hxcpp.h");  // 拿【正常目录】的头文件
-      #   于是 .gch 落进缓存目录，但 hxcpp.h 本体没被拷过去。
-      #   其他 .cpp 编译时 #include <.../pch2131c894/hxcpp.h> → 找不到 → 挂掉：
-      #        fatal error: .hxcpp-cache/haxe/pch2131c894/hxcpp.h: No such file or directory
+      # 【bug 现象】
+      #   Creating .../export/release/android/obj/obj/androidarm64-64/__pch/haxe/hxcpp.h.gch...
+      #   linc_lua.h:3:19: fatal error: .../__pch/haxe/hxcpp.h: No such file or directory
+      #    #include <hxcpp.h>
+      #   compilation terminated.
+      #   → 之后 hxcpp 的并行 make 不退出，硬挂到 timeout 砍掉（实测挂了 40~90 分钟）。
       #
-      #   实测 #797：15:14:06 开始建 PCH，15:14:13 就报这个错，
-      #   然后 hxcpp 的并行 make 不退出，硬挂 90 分钟被 timeout 砍掉（RC=124）。
+      # 【根因】hxcpp 的 PCH 目录里只有 hxcpp.h.gch，没有 hxcpp.h 本体。
+      #   · tools/hxcpp/Compiler.hx:precompile() 的 gcc 分支只做：
+      #       args.push("-o"); args.push(pch_name);                       // 产出 hxcpp.h.gch
+      #       args.push(precompiledHeaderDir + "/hxcpp.h");               // 从【别处】读头文件
+      #     也就是 .gch 和 .h 被分到了两个目录。
+      #   · 而 gcc 用 PCH 的前提是【头文件与 .gch 同目录】：见到 -I 里有 hxcpp.h.gch，
+      #     它就只认 __pch/haxe/hxcpp.h，不再往后搜索 -I .../hxcpp/git/include。
+      #   结果就是所有 #include <hxcpp.h> 全挂（包括 linc_luajit 的 linc_lua.h、__boot__.cpp）。
+      #   这是 hxcpp 3.3.49+ 的已知回归（HaxeFoundation/hxcpp#494），至今未修。
       #
-      #   iOS 不受影响：clang 走的是 mPCH != "gcc" 分支，会把头文件一起处理。
-      #   所以缓存只留给 iOS，安卓这边彻底不设这个变量。
+      # 【解法】hxcpp 官方在 toolchain/gcc-toolchain.xml 里就留了开关：
+      #       <set name="NO_PRECOMPILED_HEADERS" value="1" if="GCC_OLD" />
+      #       <set name="USE_PRECOMPILED_HEADERS" value="gcc" unless="NO_PRECOMPILED_HEADERS"/>
+      #   只要 NO_PRECOMPILED_HEADERS 存在，USE_PRECOMPILED_HEADERS 就不会被设，
+      #   BuildTool.hx:426 的 initPrecompile(null) 返回 false → group.dontPrecompile()
+      #   → 完全不生成也不使用 PCH，报错链彻底消失。
+      #   BuildTool.hx:1493 会把所有环境变量灌进 defines，所以这里设环境变量就能生效。
+      #   代价：失去 PCH 带来的编译加速，大约增加几分钟；换来的是能编过。
+      NO_PRECOMPILED_HEADERS: "1"
+
+      # ⚠ 另外，安卓也【不能】开 HXCPP_COMPILE_CACHE：
+      #   开了之后 getPchDir() 会把 PCH 目录挪进 .hxcpp-cache/，问题同上且更难排查。
+      #   iOS 不受影响（clang 走 mPCH != "gcc" 分支，头文件会一起处理），缓存只留给 iOS。
       # HXCPP_COMPILE_CACHE: ...
 
     steps:
@@ -638,12 +655,12 @@ jobs:
           START=$(date +%s)
           # ⚠ 同 iOS：用 tee + stdbuf 让编译输出实时可见，
           #   否则界面上只能看到一个「编译中」，无法判断是编还是卡死。
-          # ⚠ timeout 40m 兜底：正常 arm64 全量 C++ 编译约 20~30 分钟，
-          #   给到 40 分钟足够；万一再出现「报错后 hxcpp 并行 make 不退出」
-          #   的挂死（#797 挂了 90 分钟），40 分钟就能砍掉，损失可控。
-          stdbuf -oL -eL timeout 40m haxelib run lime build android -release 2>&1 | tee build.log
+          # ⚠ timeout 60m 兜底：关掉 PCH 后没有预编译头加速，arm64 全量 C++
+          #   编译预计 25~40 分钟，给到 60 分钟余量；万一再出现
+          #   「报错后 hxcpp 并行 make 不退出」的挂死，60 分钟也能砍掉。
+          stdbuf -oL -eL timeout 60m haxelib run lime build android -release 2>&1 | tee build.log
           RC=${PIPESTATUS[0]}
-          if [ "$RC" = "124" ]; then echo "### 编译超时被 timeout 40m 砍掉（疑似 hxcpp 报错后挂死）###"; fi
+          if [ "$RC" = "124" ]; then echo "### 编译超时被 timeout 60m 砍掉（疑似 hxcpp 报错后挂死）###"; fi
           END=$(date +%s)
           echo "lime build RC=$RC  耗时 $((END-START)) 秒  log=$(wc -c < build.log) bytes"
           echo "### 日志里 Compiling 行数（越少说明缓存命中越多）"
