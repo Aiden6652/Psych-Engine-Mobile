@@ -340,7 +340,10 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          # 装 android-33：配合 AGP 7.3.1（官方只测到 compileSdk 33）。
+          # 注意 runner 上还有自带的更高版本 platform，lime 可能会挑最高的那个，
+          # 但那只产生 WARNING（build 会继续），不是致命错误，所以不强行删除。
+          packages: 'platforms;android-33 build-tools;33.0.2 platform-tools'
 
       - name: 确认安卓 SDK 就绪
         run: |
@@ -538,6 +541,43 @@ jobs:
           grep -m1 '"version"' "$HAXELIB_ROOT/hxcpp/git/haxelib.json" || true
 
           haxelib list
+
+      - name: 修正 lime 的安卓 Gradle 模板（androidx 版本与 AGP 对不上）
+        run: |
+          set -Eeuo pipefail
+          GRADLE_TPL="$HAXELIB_ROOT/lime/git/templates/android/template/app/build.gradle"
+          if [ ! -f "$GRADLE_TPL" ]; then
+            echo "!! 找不到 lime 模板: $GRADLE_TPL"; exit 1
+          fi
+
+          echo "### 改前 ###"
+          grep -n "androidx" "$GRADLE_TPL" || true
+
+          # 【问题】lime 8.2.2 的模板里硬编码了：
+          #     implementation "androidx.core:core:1.17.0"
+          #     implementation "androidx.documentfile:documentfile:1.1.0"
+          #   但这是 2025 年的版本，要求 Android Gradle plugin ≥ 8.9.1 / 8.1.1，
+          #   而本项目为兼容 Gradle 7.5.1 锁的是 AGP 7.3.1（只能配 compileSdk ≤ 33）。
+          #   于是 Gradle 在 :app:checkDebugAarMetadata 直接报：
+          #     Dependency 'androidx.core:core:1.17.0' requires Android Gradle plugin 8.9.1 or higher.
+          #     Dependency 'androidx.documentfile:documentfile:1.1.0' requires Android Gradle plugin 8.1.1 or higher.
+          #   （并且 Gradle 报这个错时自己还会 StackOverflowError，把真实原因埋掉。）
+          #
+          # 【解法】把这两个依赖降到 AGP 7.3.1 / compileSdk 33 时代的口径：
+          #     androidx.core:core:1.10.1        ← 1.10.x 是最后一批只要 compileSdk 33 的
+          #     androidx.documentfile:documentfile:1.0.1  ← 2019 年的稳定版
+          #   引擎只用到 FileProvider / DocumentFile 这些基础 API，1.10.1 完全够。
+          sed -i \
+            -e 's/androidx\.core:core:1\.17\.0/androidx.core:core:1.10.1/g' \
+            -e 's/androidx\.documentfile:documentfile:1\.1\.0/androidx.documentfile:documentfile:1.0.1/g' \
+            "$GRADLE_TPL"
+
+          echo "### 改后 ###"
+          grep -n "androidx" "$GRADLE_TPL" || true
+          if grep -q "core:1.17.0" "$GRADLE_TPL"; then
+            echo "!! 替换失败，模板里还是 1.17.0"; exit 1
+          fi
+          echo "OK：androidx 已降到 AGP 7.3.1 可用版本"
 
       - name: 自检视频库 hxvlc（确认 Android 原生库在）
         run: |
