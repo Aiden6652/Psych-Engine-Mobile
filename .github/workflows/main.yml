@@ -550,6 +550,21 @@ jobs:
             echo "!! 找不到 lime 模板: $GRADLE_TPL"; exit 1
           fi
 
+          # ⚠⚠ 先做一次全量取证：把模板里所有跟 abiFilters / compileSdk / androidx
+          #    相关的行都打出来。上一次（#800）日志里编了两遍（aarch64 22 分钟 +
+          #    armv7 12 分钟），说明 Project.xml 里删掉 <architecture name="armv7" />
+          #    并不能阻止 lime 打包 armv7 —— 得先看到 abiFilters 到底写在哪儿。
+          echo "### 模板里 abiFilters / abiFilters 相关 ###"
+          grep -rn "abiFilters\|arm64-v8a\|armeabi-v7a\|ndk {" \
+            "$HAXELIB_ROOT/lime/git/templates/android/template/" 2>/dev/null || echo "（模板里没有）"
+          echo "### 模板里 compileSdk / targetSdk / minSdk ###"
+          grep -rn "compileSdk\|targetSdk\|minSdk" \
+            "$HAXELIB_ROOT/lime/git/templates/android/template/" 2>/dev/null || echo "（模板里没有）"
+          echo "### lime 源码里 abiFilters 定义处 ###"
+          grep -rn "abiFilters" "$HAXELIB_ROOT/lime/git/src/" 2>/dev/null | head -20 || echo "（源码里没有）"
+          echo "### 模板 app/build.gradle 全文（只贴前 130 行）###"
+          sed -n '1,130p' "$GRADLE_TPL"
+
           echo "### 改前 ###"
           grep -n "androidx" "$GRADLE_TPL" || true
 
@@ -578,6 +593,23 @@ jobs:
             echo "!! 替换失败，模板里还是 1.17.0"; exit 1
           fi
           echo "OK：androidx 已降到 AGP 7.3.1 可用版本"
+
+          # ⚠⚠ 只编 arm64-v8a。
+          #   上一轮在 Project.xml 里删掉 <architecture name="armv7" /> 后，
+          #   #800（commit 58215f73）依然编了两遍：aarch64 05:28:49→05:34:37，
+          #   arm-linux-androideabi 05:34:47→05:40:40，白烧 12 分钟。
+          #   根因是 lime 的 Gradle 模板里 ndk.abiFilters 写死了两个 ABI，
+          #   跟 Project.xml 的 <architecture> 不是一回事。
+          #   这里直接把非 arm64 的 ABI 从模板里删掉，编完只留 arm64-v8a。
+          for f in "$HAXELIB_ROOT/lime/git/templates/android/template/app/build.gradle" \
+                   "$HAXELIB_ROOT/lime/git/templates/android/template/build.gradle"; do
+            [ -f "$f" ] || continue
+            sed -i -e 's/armeabi-v7a//g' -e 's/armeabi_v7a//g' \
+                   -e 's/,\s*,/,/g' -e 's/,\s*]/]/g' -e 's/\[\s*,/[/g' "$f"
+          done
+          echo "### 清理后 abiFilters 现状 ###"
+          grep -rn "abiFilters\|arm64-v8a\|armeabi" \
+            "$HAXELIB_ROOT/lime/git/templates/android/template/" 2>/dev/null || echo "（已无 armeabi）"
 
       - name: 自检视频库 hxvlc（确认 Android 原生库在）
         run: |
